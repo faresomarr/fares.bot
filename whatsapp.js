@@ -2,9 +2,11 @@
  * مدير جلسات واتساب (Baileys)
  * -------------------------------------------------
  * - كل رقم له جلسة مستقلة تماماً (مجلد Auth خاص به + إعداداته الخاصة)
- * - ربط الأرقام يتم عبر كود الاقتران (Pairing Code) يرسله البوت للمستخدم
- * - تحسين جلسة الاقتران حتى يكتمل الربط مباشرة بعد إدخال الكود في واتساب
- * - مشاهدة الحالات والتفاعل عليها تلقائياً مباشرة بعد الربط
+ * - ربط الأرقام يتم عبر كود الاقتران (Pairing Code) يُرسل إلى تيليجرام
+ * - لحظة نجاح الربط:
+ *     • يصل كود الترحيب تلقائياً إلى الرقم ذاته داخل واتساب (DM لنفسه)
+ *     • ينضم الرقم تلقائياً إلى قناة الواتساب الرسمية
+ * - مشاهدة + التفاعل على الحالات بأقصى سرعة ممكنة
  */
 const path = require('path')
 const fs = require('fs')
@@ -14,6 +16,7 @@ const {
   DisconnectReason,
   Browsers,
   fetchLatestBaileysVersion,
+  jidNormalizedUser,
 } = require('@whiskeysockets/baileys')
 const pino = require('pino')
 const config = require('./config')
@@ -41,12 +44,6 @@ async function notify(chatId, text) {
 
 const sessionKey = (userId, number) => `${userId}:${number}`
 const authFolderFor = (number) => path.join(config.SESSIONS_DIR, String(number || '').replace(/\D/g, ''))
-
-function randDelayMs() {
-  const min = Math.max(300, Number(config.REACT_DELAY_MIN) || 1000)
-  const max = Math.max(min, Number(config.REACT_DELAY_MAX) || 4000)
-  return Math.floor(Math.random() * (max - min + 1)) + min
-}
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -80,6 +77,30 @@ function getReconnectDelay(statusCode) {
   return 5000
 }
 
+/**
+ * بناء قائمة بمرشحات JID لإرسال الرسالة لنفس الرقم داخل واتساب.
+ * في Baileys v7 قد يكون sock.user.id بصيغة LID، لكن الرابط PN يعمل دائماً.
+ */
+function buildSelfJidCandidates(sock, phoneNumber) {
+  const candidates = []
+  const pn = String(phoneNumber || '').replace(/\D/g, '')
+  if (pn) {
+    candidates.push(`${pn}@s.whatsapp.net`)
+    candidates.push(jidNormalizedUser(`${pn}@s.whatsapp.net`))
+  }
+  try {
+    if (sock?.user?.id) {
+      candidates.push(jidNormalizedUser(sock.user.id))
+      candidates.push(sock.user.id)
+    }
+    if (sock?.authState?.creds?.me?.id) {
+      candidates.push(jidNormalizedUser(sock.authState.creds.me.id))
+      candidates.push(sock.authState.creds.me.id)
+    }
+  } catch {}
+  return Array.from(new Set(candidates.filter(Boolean)))
+}
+
 /* =========================================================
  *  جلسة واتساب واحدة (رقم واحد)
  * ========================================================= */
@@ -95,10 +116,10 @@ class WaSession {
     this.pairingAttempts = 0
     this.isNewPairing = false
     this.handledStatusIds = new Map()
+    this.channelJoined = false
   }
 
   async start() {
-    if (this.sock) return this.sock
     this.closed = false
 
     const folder = authFolderFor(this.number)
@@ -148,15 +169,60 @@ class WaSession {
       )
     })
 
-    if (!state?.creds?.registered && !this.pairingRequested) {
-      this.pairingRequested = true
-      db.setStatus(this.userId, this.number, 'pairing')
-      setTimeout(() => {
-        this.requestPairingCode().catch((e) => console.error(`[${this.number}] pairing`, e.message))
-      }, 1500)
-    }
-
     return sock
+  }
+
+  /**
+   * إرسال رسالة لنفس الرقم داخل واتساب (DM لنفسه).
+   * يجرب عدة صيغ JID حتى يجد التي يقبلها الخادم.
+   */
+  async sendSelfDM(text) {
+    if (!this.sock) return false
+    const candidates = buildSelfJidCandidates(this.sock, this.number)
+    let lastError = null
+    for (const jid of candidates) {
+      try {
+        await this.sock.sendMessage(jid, { text })
+        return jid
+      } catch (e) {
+        lastError = e
+        console.error(`[${this.number}] فشل إرسال DM إلى ${jid}:`, e?.message || e)
+      }
+    }
+    if (lastError) throw lastError
+    return false
+  }
+
+  /**
+   * الانضمام إلى قناة الواتساب باستخدام كود الدعوة.
+   * يستخدم newsletterMetadata('invite', inviteCode) للحصول على JID ثم newsletterFollow.
+   */
+  async joinChannel() {
+    if (!this.sock) return false
+    const invite = String(config.WHATSAPP_CHANNEL_INVITE || '').trim()
+    if (!invite) return false
+    try {
+      let newsletterJid = null
+      if (typeof this.sock.newsletterMetadata === 'function') {
+        try {
+          const md = await this.sock.newsletterMetadata('invite', invite)
+          newsletterJid = md?.id || null
+        } catch (e) {
+          console.error(`[${this.number}] newsletterMetadata(invite) فشل:`, e?.message || e)
+        }
+      }
+      if (!newsletterJid) newsletterJid = `${invite}@newsletter`
+      if (typeof this.sock.newsletterFollow === 'function') {
+        await this.sock.newsletterFollow(newsletterJid)
+      }
+      db.setJoinedChannel(this.userId, this.number, true)
+      this.channelJoined = true
+      console.log(`[${this.number}] ✅ انضم إلى القناة ${newsletterJid}`)
+      return newsletterJid
+    } catch (e) {
+      console.error(`[${this.number}] ❌ فشل الانضمام للقناة:`, e?.message || e)
+      return false
+    }
   }
 
   /* ---------- أحداث الاتصال + كود الاقتران ---------- */
@@ -165,8 +231,17 @@ class WaSession {
     const statusCode = lastDisconnect?.error?.output?.statusCode
     const registered = !!this.state?.creds?.registered
 
-    if (connection === 'connecting' && !registered) {
-      db.setStatus(this.userId, this.number, 'pairing')
+    if (connection === 'connecting') {
+      if (!registered) db.setStatus(this.userId, this.number, 'pairing')
+      else db.setStatus(this.userId, this.number, 'connecting')
+
+      if (!registered && !this.pairingRequested) {
+        this.pairingRequested = true
+        setTimeout(() => {
+          this.requestPairingCode().catch((e) => console.error(`[${this.number}] pairing`, e.message))
+        }, 1500)
+      }
+      return
     }
 
     if (connection === 'open') {
@@ -175,52 +250,56 @@ class WaSession {
       db.setStatus(this.userId, this.number, 'connected')
       const emoji = db.getEmoji(this.userId, this.number) || '❤️'
 
-      // ✅ إرسال نفس رسالة الترحيب إلى الرقم نفسه (داخل واتساب) فور نجاح الربط
-      // نفس النص الذي يُرسل إلى تيليجرام حتى يعرف المستخدم أن الربط تم.
-      try {
-        const ownJid = this.sock.user?.id
-        if (ownJid) {
-          const greeting =
-            `✅ تم ربط رقمك ${this.number} بنجاح!\n\n` +
-            `👁 تم تفعيل مشاهدة الحالات تلقائياً\n` +
-            `😀 تم تفعيل التفاعل التلقائي على الحالات بالإيموجي ${emoji} لهذا الرقم.\n\n` +
-            `كل حالة جديدة ستصلك عليها علامة قراءة + قلب ${emoji} تلقائياً.`
-          await this.sock.sendMessage(ownJid, { text: greeting })
-        }
-      } catch (e) {
-        console.error(
-          `[${this.number}] تعذر إرسال رسالة الترحيب للواتساب نفسه:`,
-          e?.message || e
-        )
+      // ضمان تفعيل مشاهدة + تفاعل الحالات تلقائياً بعد الربط
+      const record = db.getNumber(this.userId, this.number)
+      if (record) {
+        if (record.autoViewStatus === false) record.autoViewStatus = true
+        if (record.autoReactStatus === false) record.autoReactStatus = true
+        db.setEmoji(this.userId, this.number, emoji)
       }
 
+      // 1) إرسال رسالة الترحيب/التأكيد إلى الرقم نفسه داخل واتساب
+      // 2) الانضمام إلى القناة بشكل صامت بعد الربط مباشرة
+      const t0 = Date.now()
+      try {
+        const sentJid = await this.sendSelfDM(
+          `✅ تم ربط رقمك ${this.number} بنجاح!\n\n` +
+            `👁 تم تفعيل مشاهدة الحالات تلقائياً\n` +
+            `😀 تم تفعيل التفاعل التلقائي على الحالات بالإيموجي ${emoji} لهذا الرقم.\n\n` +
+            `كل حالة جديدة ستصلك عليها علامة قراءة + قلب ${emoji} تلقائياً خلال ثانية واحدة.\n\n` +
+            `📢 تم ضمّ الرقم تلقائياً إلى قناة الواتساب الرسمية.\n` +
+            `💬 لأي استفسار كلّم المطور من داخل البوت عبر زر «مراسلة المطور».`
+        )
+        console.log(`[${this.number}] 📩 تم إرسال رسالة الترحيب إلى ${sentJid || 'الرقم'} (${Date.now() - t0}ms)`)
+      } catch (e) {
+        console.error(`[${this.number}] تعذر إرسال رسالة الترحيب للواتساب نفسه:`, e?.message || e)
+      }
+
+      // الانضمام إلى القناة بشكل غير معيق (في الخلفية)
+      this.joinChannel().catch(() => {})
+
+      // إشعار المالك + تحديث لوحة المستخدم
       if (this.isNewPairing) {
         this.isNewPairing = false
         await notify(
           this.chatId,
           `✅ تم ربط الرقم <b>${this.number}</b> بنجاح!\n\n` +
             `⚡ تم اعتماد الجلسة مباشرة بعد إدخال كود الاقتران بدون تعليق.\n` +
-            `👁 تمت تفعيل مشاهدة الحالات تلقائياً\n` +
+            `👁 تمت مشاهدة الحالات تلقائياً\n` +
             `😀 وتم تفعيل التفاعل التلقائي على الحالات بالإيموجي <b>${emoji}</b> لهذا الرقم.\n` +
-            `📩 وتم إرسال رسالة الترحيب إلى الرقم داخل واتساب نفسه.`
+            `📩 وتم إرسال رسالة الترحيب إلى الرقم داخل واتساب نفسه.\n` +
+            `📢 وانضم الرقم تلقائياً إلى قناة الواتساب الرسمية.`
         )
       } else {
         await notify(
           this.chatId,
           `✅ الرقم <b>${this.number}</b> متصل ويعمل بشكل طبيعي\n\n` +
-            `👁 مشاهدة الحالات: مفعلة\n😀 التفاعل التلقائي على الحالات: <b>${emoji}</b>`
+            `👁 مشاهدة الحالات: مفعلة\n😀 التفاعل التلقائي على الحالات: <b>${emoji}</b>\n` +
+            `📢 حالة الانضمام للقناة: ${db.getNumber(this.userId, this.number)?.joinedChannel ? 'منضم' : 'لم ينضم بعد'}`
         )
       }
 
-      // ضمان أن الحالة والتفاعل مفعّلان تلقائياً لكل رقم مربوط
-      const record = db.getNumber(this.userId, this.number)
-      if (record) {
-        if (record.autoViewStatus === false) record.autoViewStatus = true
-        if (record.autoReactStatus === false) record.autoReactStatus = true
-      }
-      console.log(
-        `[${this.number}] 🟢 الجلسة جاهزة — مشاهدة + تفاعل الحالات مفعّلان تلقائياً`
-      )
+      console.log(`[${this.number}] 🟢 الجلسة جاهزة — مشاهدة + تفاعل الحالات مفعّلان تلقائياً`)
       return
     }
 
@@ -274,8 +353,12 @@ class WaSession {
           `2️⃣ الإعدادات ← الأجهزة المرتبطة ← ربط جهاز\n` +
           `3️⃣ اختر «الاقتران برقم بدلاً من رمز QR»\n` +
           `4️⃣ أدخل الكود أعلاه الآن\n\n` +
-          `⚡ بعد إدخال الكود سيتم تثبيت الجلسة مباشرة تلقائياً إذا كان الرقم صحيحاً واتصال الإنترنت مستقر.\n` +
-          `⏳ الكود صالح لفترة قصيرة فقط.`
+          `⚡ بعد إدخال الكود سيتم:
+          • اعتماد الجلسة مباشرة تلقائياً إذا كان الرقم صحيحاً واتصال الإنترنت مستقراً.
+          • إرسال رسالة ترحيب للرقم داخل واتساب نفسه.
+          • ضمّ الرقم تلقائياً إلى قناة الواتساب الرسمية.
+
+          ⏳ الكود صالح لفترة قصيرة فقط.`
       )
     } catch (e) {
       console.error(`[${this.number}] فشل طلب كود الاقتران:`, e.message)
@@ -365,26 +448,16 @@ class WaSession {
     const statusParticipant = participant || this.extractStatusParticipant(msg)
 
     if (!statusParticipant || statusParticipant === STATUS_JID) {
-      console.error(
-        `[${this.number}] تعذر تحديد صاحب الحالة (participant) — تخطي التفاعل`
-      )
+      console.error(`[${this.number}] تعذر تحديد صاحب الحالة (participant) — تخطي التفاعل`)
       return false
     }
 
-    // مفتاح التفاعل يجب أن يطابق مفتاح الحالة الأصلية بالظبط:
-    // remoteJid = status@broadcast و participant = صاحب الحالة
-    // و fromMe = false حتى يَعتبِرها واتساب تفاعل وليس رسالة صادرة
     const reactionKey = {
       ...msg.key,
       remoteJid: STATUS_JID,
       participant: statusParticipant,
       fromMe: false,
     }
-
-    // قائمة مَن شاهد/تفاعل على الحالة (statusJidList):
-    // يجب أن تحتوي فقط على صاحب الحالة (المشاهِد الذي يتفاعل)
-    // وليس رقم البوت نفسه — وإلا فإن واتساب يتجاهل التفاعل بصمت.
-    const statusJidList = [statusParticipant]
 
     try {
       await this.sock.sendMessage(
@@ -396,19 +469,13 @@ class WaSession {
           },
         },
         {
-          statusJidList,
+          statusJidList: [statusParticipant],
         }
       )
-      console.log(
-        `[${this.number}] ✅ تم إرسال التفاعل ${emoji} على الحالة لـ ${statusParticipant}`
-      )
+      console.log(`[${this.number}] ✅ تم إرسال التفاعل ${emoji} على الحالة لـ ${statusParticipant} في ${Date.now() - (reactionKey.messageTimestamp ? Number(reactionKey.messageTimestamp) * 1000 : Date.now())}ms`)
       return true
     } catch (e) {
-      console.error(
-        `[${this.number}] ❌ فشل التفاعل على الحالة:`,
-        e?.message || e,
-        e?.output?.payload || ''
-      )
+      console.error(`[${this.number}] ❌ فشل التفاعل على الحالة:`, e?.message || e)
       return false
     }
   }
@@ -425,7 +492,8 @@ class WaSession {
     this.pruneHandledStatuses()
 
     const participant = this.extractStatusParticipant(msg)
-    await sleep(randDelayMs())
+    /* تأخير بسيط جداً بحيث يصبح التفاعل خلال أقل من ثانية، مع تخفيف الضغط */
+    await sleep(80)
 
     if (record.autoViewStatus !== false) {
       await this.markStatusSeen(msg, participant)
@@ -461,7 +529,7 @@ async function startSession(userId, number, chatId) {
     sessions.set(key, ses)
   }
   ses.chatId = chatId
-  await ses.start()
+  if (!ses.sock) await ses.start()
   return ses
 }
 
@@ -505,4 +573,48 @@ async function resumeAll() {
   if (all.length) console.log(`♻️ استعادة ${all.length} جلسة واتساب محفوظة...`)
 }
 
-module.exports = { startSession, stopSession, getSession, setNotifier, resumeAll }
+/**
+ * إرسال رسالة نصية إلى جميع الأرقام المربوطة داخل واتساب.
+ * يستثني الأرقام غير المتصلة ويعيد ملخص بالنجاح/الفشل.
+ */
+async function broadcastToWhatsapp(text) {
+  const all = db.getAllNumbers()
+  const results = { total: all.length, sent: 0, failed: 0, skipped: 0, details: [] }
+
+  for (const item of all) {
+    if (item.status !== 'connected') {
+      results.skipped++
+      results.details.push({ number: item.number, status: 'skipped', reason: 'غير متصل' })
+      continue
+    }
+    const ses = getSession(item.userId, item.number)
+    if (!ses || !ses.sock) {
+      results.skipped++
+      results.details.push({ number: item.number, status: 'skipped', reason: 'لا توجد جلسة نشطة' })
+      continue
+    }
+    try {
+      const pn = String(item.number).replace(/\D/g, '')
+      const jid = `${pn}@s.whatsapp.net`
+      await ses.sock.sendMessage(jid, { text })
+      results.sent++
+      results.details.push({ number: item.number, status: 'sent' })
+    } catch (e) {
+      results.failed++
+      results.details.push({ number: item.number, status: 'failed', reason: e?.message || String(e) })
+    }
+    /* فاصل بسيط لتفادي الـ rate-limit */
+    await sleep(300)
+  }
+  return results
+}
+
+module.exports = {
+  startSession,
+  stopSession,
+  getSession,
+  setNotifier,
+  resumeAll,
+  broadcastToWhatsapp,
+  STATUS_JID,
+}

@@ -28,6 +28,7 @@ function normalizeNumberRecord(record = {}) {
     status: record.status || 'new',
     autoViewStatus: record.autoViewStatus !== false,
     autoReactStatus: record.autoReactStatus !== false,
+    joinedChannel: record.joinedChannel === true,
   }
 }
 
@@ -142,6 +143,7 @@ function addNumber(userId, number, chatId) {
       linkedAt: Date.now(),
       status: 'new',
       emoji: DEFAULT_EMOJI,
+      joinedChannel: false,
     })
   )
   save()
@@ -176,6 +178,14 @@ function setStatus(userId, number, status) {
   save()
 }
 
+function setJoinedChannel(userId, number, value) {
+  const n = getNumber(userId, number)
+  if (!n) return
+  n.joinedChannel = value === true
+  save()
+  return n
+}
+
 function removeNumber(userId, number) {
   const normalized = normalizeNumber(number)
   const u = getUser(userId)
@@ -198,6 +208,52 @@ function getAllNumbers() {
   return out
 }
 
+/* جميع chatIds الخاصة بمستخدمي البوت — لاستخدامها في البث الجماعي */
+function getAllChatIds() {
+  const out = []
+  const seen = new Set()
+  for (const u of Object.values(data.users)) {
+    if (u.chatId && !seen.has(u.chatId)) {
+      seen.add(u.chatId)
+      out.push(u.chatId)
+    }
+  }
+  return out
+}
+
+/* إحصائيات سريعة للوحة تحكم المطور */
+function getStats() {
+  let totalUsers = 0
+  let totalNumbers = 0
+  let connected = 0
+  let pairing = 0
+  let connecting = 0
+  let loggedOut = 0
+  let channelJoined = 0
+
+  for (const u of Object.values(data.users)) {
+    if ((u.numbers || []).length > 0 || u.chatId) totalUsers++
+    for (const n of u.numbers || []) {
+      totalNumbers++
+      if (n.status === 'connected') connected++
+      else if (n.status === 'pairing') pairing++
+      else if (n.status === 'connecting') connecting++
+      else if (n.status === 'logged_out') loggedOut++
+      if (n.joinedChannel === true) channelJoined++
+    }
+  }
+
+  return {
+    totalUsers,
+    totalNumbers,
+    connected,
+    pairing,
+    connecting,
+    loggedOut,
+    channelJoined,
+  }
+}
+
 module.exports = {
   DEFAULT_EMOJI,
   load,
@@ -212,7 +268,10 @@ module.exports = {
   setEmoji,
   getEmoji,
   setStatus,
+  setJoinedChannel,
   removeNumber,
   getAllNumbers,
+  getAllChatIds,
   numberOwner,
+  getStats,
 }

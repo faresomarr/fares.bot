@@ -1,9 +1,16 @@
 /**
  * بوت تيليجرام لربط أرقام واتساب والتفاعل التلقائي مع الحالات
  * -----------------------------------------------------------
- * المتطلبات:
- * - توكن بوت تيليجرام من @BotFather داخل ملف .env
- * - كل رقم يعمل في جلسة واتساب مستقلة بإيموجي تفاعل خاص به
+ * - ربط أرقام واتساب برمز الاقتران من داخل البوت
+ * - كل رقم يعمل في جلسة Baileys مستقلة بمجلد Auth خاص به
+ * - بعد الربط داخل واتساب:
+ *     • يصل تأكيد للرقم نفسه داخل واتساب
+ *     • ينضم الرقم تلقائياً إلى قناة الواتساب الرسمية
+ *     • يُفعَّل التفاعل على الحالات بأقصى سرعة
+ * - أوامر:
+ *     /start   الواجهة الرئيسية + زر مراسلة المطور + زر قناة الواتساب
+ *     /admin   لوحة المطور (بث جماعي + إحصائيات)
+ *     /add /remove أوامر نصية لإدارة الأرقام
  */
 const TelegramBot = require('node-telegram-bot-api')
 const emojiRegex = require('emoji-regex')
@@ -30,6 +37,10 @@ function isAuthorized(userId) {
   return config.ADMIN_IDS.includes(userId)
 }
 
+function isDeveloper(userId) {
+  return Number(userId) === Number(config.DEVELOPER_ID)
+}
+
 function escapeHtml(value) {
   return String(value || '')
     .replace(/&/g, '&amp;')
@@ -52,10 +63,18 @@ function mainMenuKeyboard() {
   return {
     reply_markup: {
       inline_keyboard: [
-        [{ text: '😀 تغيير إيموجي التفاعل', callback_data: 'emoji_start' }],
-        [{ text: '➕ ربط رقم جديد', callback_data: 'link' }],
-        [{ text: '📋 أرقامي المربوطة', callback_data: 'list' }],
-        [{ text: '🗑 حذف رقم', callback_data: 'del_list' }],
+        [
+          { text: '➕ ربط رقم جديد', callback_data: 'link' },
+          { text: '😀 تغيير إيموجي التفاعل', callback_data: 'emoji_start' },
+        ],
+        [
+          { text: '📋 أرقامي المربوطة', callback_data: 'list' },
+          { text: '🗑 حذف رقم', callback_data: 'del_list' },
+        ],
+        [
+          { text: '👨‍💻 مراسلة المطور', url: `https://wa.me/${config.DEVELOPER_WHATSAPP}` },
+          { text: '📢 قناة الواتساب', url: config.WHATSAPP_CHANNEL_URL },
+        ],
       ],
     },
   }
@@ -70,7 +89,8 @@ function buildDashboardText(userId) {
           (n, i) =>
             `${i + 1}. 📱 <b>${escapeHtml(n.number)}</b>\n` +
             `   😀 إيموجي التفاعل: <b>${escapeHtml(n.emoji || '❤️')}</b>\n` +
-            `   📶 الحالة: ${statusText(n.status)}`
+            `   📶 الحالة: ${statusText(n.status)}\n` +
+            `   📢 منضم للقناة: ${n.joinedChannel ? '✅ نعم' : '❌ لا'}`
         )
         .join('\n\n')
     : '— لا توجد أرقام مربوطة حالياً.'
@@ -79,10 +99,18 @@ function buildDashboardText(userId) {
     `👋 أهلًا بك في بوت التفاعل مع الحالات!\n\n` +
     `📌 <b>ماذا يفعل البوت:</b>\n` +
     `• تربط رقم واتساب عبر كود الاقتران من داخل البوت مباشرة\n` +
-    `• يتفاعل البوت تلقائياً وبشكل مستمر على حالات (ستوريات) جهات اتصالك\n` +
-    `• كل رقم له جلسة مستقلة وإيموجي تفاعل خاص به لا يتأثر بغيره\n\n` +
+    `• يتفاعل البوت تلقائياً وبشكل مستمر على حالات (ستوريات) جهات اتصالك خلال ثانية واحدة\n` +
+    `• كل رقم له جلسة مستقلة وإيموجي تفاعل خاص به لا يتأثر بغيره\n` +
+    `• بعد نجاح الربط:
+  ↪️ يصل تأكيد للرقم داخل واتساب نفسه
+  ↪️ ينضم الرقم تلقائياً إلى قناة الواتساب الرسمية
+
+‏
+` +
     `📋 <b>الأرقام الحالية:</b>\n${lines}\n\n` +
-    `ℹ️ عند تغيير الإيموجي أو تغير حالة الاتصال سيتم تحديث هذه الرسالة تلقائياً.`
+    `ℹ️ عند تغيير الإيموجي أو تغير حالة الاتصال سيتم تحديث هذه الرسالة تلقائياً.\n\n` +
+    `💬 <b>مراسلة المطور:</b> ${escapeHtml(`https://wa.me/${config.DEVELOPER_WHATSAPP}`)}\n` +
+    `📢 <b>قناة الواتساب:</b> ${escapeHtml(config.WHATSAPP_CHANNEL_URL)}`
   )
 }
 
@@ -136,7 +164,7 @@ whatsapp.setNotifier(async (chatId, text) => {
   await refreshDashboardByChat(chatId)
 })
 
-/* ربط رقم جديد: تحقق + حفظ + بدء الجلسة وإرسال كود الاقتران */
+/* ---------- ربط رقم جديد ---------- */
 async function linkNumber(chatId, userId, rawNumber) {
   const number = String(rawNumber || '').replace(/\D/g, '')
   if (!/^\d{8,15}$/.test(number)) {
@@ -178,7 +206,7 @@ async function linkNumber(chatId, userId, rawNumber) {
   })
 }
 
-/* ---------- الأوامر ---------- */
+/* ---------- أوامر تيليجرام ---------- */
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id
   const userId = msg.from.id
@@ -186,6 +214,33 @@ bot.onText(/\/start/, async (msg) => {
     return bot.sendMessage(chatId, '⛔ أنت غير مصرح لك باستخدام هذا البوت.').catch(() => {})
   db.ensureUser(userId, chatId)
   await showDashboard(chatId, userId, { forceNew: true }).catch(() => {})
+})
+
+/* لوحة المطور */
+bot.onText(/\/admin/, async (msg) => {
+  const chatId = msg.chat.id
+  const userId = msg.from.id
+  if (!isDeveloper(userId)) {
+    return bot.sendMessage(chatId, '⛔ هذا الأمر متاح للمطور فقط.').catch(() => {})
+  }
+  await bot.sendMessage(
+    chatId,
+    `👨‍💻 <b>لوحة المطور</b>\n\n` +
+      `اختر الإجراء الذي تريد تنفيذه:\n\n` +
+      `• بث جماعي لكل مستخدمي البوت\n` +
+      `• بث جماعي لكل الأرقام المربوطة داخل واتساب\n` +
+      `• عرض إحصائيات شاملة للبوت والمستخدمين والأرقام`,
+    {
+      parse_mode: 'HTML',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '📣 بث لمستخدمي البوت', callback_data: 'adm:broadcast_user' }],
+          [{ text: '📨 بث للأرقام داخل واتساب', callback_data: 'adm:broadcast_wp' }],
+          [{ text: '📊 إحصائيات', callback_data: 'adm:stats' }],
+        ],
+      },
+    }
+  )
 })
 
 /* ---------- الأزرار (Callback Queries) ---------- */
@@ -253,7 +308,8 @@ bot.on('callback_query', async (q) => {
       const lines = numbers.map(
         (n, i) =>
           `${i + 1}. 📱 <b>${escapeHtml(n.number)}</b>\n` +
-          `   😀 الإيموجي: <b>${escapeHtml(n.emoji || '❤️')}</b> | الحالة: ${statusText(n.status)}`
+          `   😀 الإيموجي: <b>${escapeHtml(n.emoji || '❤️')}</b> | الحالة: ${statusText(n.status)}\n` +
+          `   📢 منضم للقناة: ${n.joinedChannel ? '✅' : '❌'}`
       )
       return bot
         .sendMessage(chatId, `📋 أرقامك المربوطة (${numbers.length}):\n\n${lines.join('\n\n')}`, {
@@ -316,12 +372,58 @@ bot.on('callback_query', async (q) => {
       await showDashboard(chatId, userId, { messageId: q.message.message_id }).catch(() => {})
       return
     }
+
+    /* ----------- أوامر لوحة المطور ----------- */
+    if (data === 'adm:broadcast_user') {
+      if (!isDeveloper(userId))
+        return bot.answerCallbackQuery(q.id, { text: '⛔ للمطور فقط' }).catch(() => {})
+      pending.set(chatId, { action: 'broadcast_user' })
+      await bot
+        .sendMessage(
+          chatId,
+          '✍️ أرسل الرسالة التي تريد بثها لجميع مستخدمي البوت عبر تيليجرام.',
+          { parse_mode: 'HTML' }
+        )
+        .catch(() => {})
+      return bot.answerCallbackQuery(q.id).catch(() => {})
+    }
+
+    if (data === 'adm:broadcast_wp') {
+      if (!isDeveloper(userId))
+        return bot.answerCallbackQuery(q.id, { text: '⛔ للمطور فقط' }).catch(() => {})
+      pending.set(chatId, { action: 'broadcast_wp' })
+      await bot
+        .sendMessage(
+          chatId,
+          '✍️ أرسل الرسالة التي تريد بثها لجميع الأرقام المربوطة داخل واتساب (DM لكل رقم).',
+          { parse_mode: 'HTML' }
+        )
+        .catch(() => {})
+      return bot.answerCallbackQuery(q.id).catch(() => {})
+    }
+
+    if (data === 'adm:stats') {
+      if (!isDeveloper(userId))
+        return bot.answerCallbackQuery(q.id, { text: '⛔ للمطور فقط' }).catch(() => {})
+      const s = db.getStats()
+      const txt =
+        `📊 <b>إحصائيات البوت</b>\n\n` +
+        `👥 مستخدمين البوت: <b>${s.totalUsers}</b>\n` +
+        `📱 إجمالي الأرقام: <b>${s.totalNumbers}</b>\n` +
+        `🟢 متصلة: <b>${s.connected}</b>\n` +
+        `🔄 قيد الاتصال: <b>${s.connecting}</b>\n` +
+        `🔗 بانتظار كود الاقتران: <b>${s.pairing}</b>\n` +
+        `🔴 مسجل خروجها: <b>${s.loggedOut}</b>\n` +
+        `📢 منضمة للقناة: <b>${s.channelJoined}</b>`
+      await bot.sendMessage(chatId, txt, { parse_mode: 'HTML' }).catch(() => {})
+      return bot.answerCallbackQuery(q.id).catch(() => {})
+    }
   } catch (e) {
     console.error('[زر]', e.message)
   }
 })
 
-/* ---------- الرسائل النصية (إدخال الرقم / الإيموجي) ---------- */
+/* ---------- الرسائل النصية (إدخال الرقم / الإيموجي / البث) ---------- */
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id
   const userId = msg.from.id
@@ -330,11 +432,15 @@ bot.on('message', async (msg) => {
   if (msg.text.startsWith('/')) {
     const parts = msg.text.split(/\s+/)
     if (parts[0] === '/add') {
+      if (!isAuthorized(userId))
+        return bot.sendMessage(chatId, '⛔ غير مصرح.').catch(() => {})
       const num = (parts[1] || '').replace(/\D/g, '')
       if (!num) return bot.sendMessage(chatId, 'الاستخدام: /add 9665XXXXXXXX').catch(() => {})
       return linkNumber(chatId, userId, num)
     }
     if (parts[0] === '/remove') {
+      if (!isAuthorized(userId))
+        return bot.sendMessage(chatId, '⛔ غير مصرح.').catch(() => {})
       const num = (parts[1] || '').replace(/\D/g, '')
       if (!num) return bot.sendMessage(chatId, 'الاستخدام: /remove 9665XXXXXXXX').catch(() => {})
       const owned = db.getUser(userId)?.numbers?.some((n) => n.number === num)
@@ -383,6 +489,70 @@ bot.on('message', async (msg) => {
     } catch (e) {
       await bot.sendMessage(chatId, '❌ الرقم غير موجود في حسابك.').catch(() => {})
     }
+    return
+  }
+
+  /* بث جماعي داخل لوحة المطور */
+  if (p.action === 'broadcast_user' && isDeveloper(userId)) {
+    pending.delete(chatId)
+    const text = msg.text
+    const chatIds = db.getAllChatIds()
+    let sent = 0
+    let failed = 0
+    for (const cid of chatIds) {
+      try {
+        await bot.sendMessage(cid, text, { parse_mode: 'HTML' })
+        sent++
+      } catch (e) {
+        failed++
+      }
+      /* تفادي flood */
+      await new Promise((r) => setTimeout(r, 50))
+    }
+    await bot
+      .sendMessage(
+        chatId,
+        `📣 <b>تم البث لمستخدمي البوت</b>\n\n` +
+          `👥 المستهدفون: <b>${chatIds.length}</b>\n` +
+          `✅ تم الإرسال بنجاح: <b>${sent}</b>\n` +
+          `❌ فشل: <b>${failed}</b>`,
+        { parse_mode: 'HTML' }
+      )
+      .catch(() => {})
+    return
+  }
+
+  if (p.action === 'broadcast_wp' && isDeveloper(userId)) {
+    pending.delete(chatId)
+    const text = msg.text
+    await bot
+      .sendMessage(chatId, `⏳ جاري بث الرسالة إلى الأرقام المربوطة داخل واتساب...`, {
+        parse_mode: 'HTML',
+      })
+      .catch(() => {})
+    const res = await whatsapp.broadcastToWhatsapp(text)
+    const detailLines = res.details
+      .slice(0, 30)
+      .map(
+        (d) =>
+          `${d.status === 'sent' ? '✅' : d.status === 'failed' ? '❌' : '⏭'} <b>${escapeHtml(
+            d.number
+          )}</b> — ${escapeHtml(d.status)}${d.reason ? '\n   ↳ ' + escapeHtml(d.reason) : ''}`
+      )
+      .join('\n')
+    await bot
+      .sendMessage(
+        chatId,
+        `📨 <b>نتيجة البث للأرقام داخل واتساب</b>\n\n` +
+          `📱 المستهدفون: <b>${res.total}</b>\n` +
+          `✅ تم الإرسال: <b>${res.sent}</b>\n` +
+          `⏭ تم تخطيها: <b>${res.skipped}</b> (غير متصلة)\n` +
+          `❌ فشل: <b>${res.failed}</b>\n\n` +
+          (detailLines ? `🔎 <b>أول النتائج:</b>\n${detailLines}` : ''),
+        { parse_mode: 'HTML' }
+      )
+      .catch(() => {})
+    return
   }
 })
 
