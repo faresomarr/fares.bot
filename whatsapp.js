@@ -331,10 +331,18 @@ class WaSession {
   async reactToStatus(msg, participant) {
     if (!this.sock) return false
     const emoji = db.getEmoji(this.userId, this.number) || '❤️'
-    const statusJidList = [participant, this.sock.user?.id].filter(Boolean)
+    const statusParticipant = participant || this.extractStatusParticipant(msg)
+    const statusJidList = [statusParticipant, this.sock.user?.id].filter(Boolean)
+    
     if (!statusJidList.length) {
       console.error(`[${this.number}] تعذر تحديد صاحب الحالة لإرسال التفاعل`)
       return false
+    }
+
+    const key = {
+      ...msg.key,
+      remoteJid: STATUS_JID,
+      participant: statusParticipant,
     }
 
     try {
@@ -343,7 +351,7 @@ class WaSession {
         {
           react: {
             text: emoji,
-            key: msg.key,
+            key: key,
           },
         },
         {
