@@ -1,15 +1,31 @@
 /**
  * قاعدة بيانات بسيطة (JSON) لتخزين:
- * - أرقام كل مستخدم مع إيموجي التفاعل الخاص بكل رقم
+ * - أرقام كل مستخدم مع إعدادات التفاعل الخاصة بكل رقم
  * - chatId لكل مستخدم لإرسال الإشعارات
- * كل رقم له إعداداته الخاصة => تغيير إيموجي رقم لا يؤثر على غيره
+ * - تفعيل مشاهدة الحالات والتفاعل عليها تلقائياً بشكل افتراضي
  */
 const fs = require('fs')
 const path = require('path')
 const config = require('./config')
 
+const DEFAULT_EMOJI = '❤️'
 const file = config.DB_FILE
 let data = { users: {} }
+
+function normalizeNumber(raw) {
+  return String(raw || '').replace(/\D/g, '')
+}
+
+function normalizeNumberRecord(record = {}) {
+  return {
+    number: normalizeNumber(record.number),
+    emoji: DEFAULT_EMOJI,
+    linkedAt: Number(record.linkedAt || Date.now()),
+    status: record.status || 'new',
+    autoViewStatus: true,
+    autoReactStatus: true,
+  }
+}
 
 function load() {
   try {
@@ -20,7 +36,23 @@ function load() {
     console.error('⚠️ خطأ في قراءة قاعدة البيانات:', e.message)
     data = { users: {} }
   }
-  if (!data.users) data.users = {}
+
+  if (!data || typeof data !== 'object') data = { users: {} }
+  if (!data.users || typeof data.users !== 'object') data.users = {}
+
+  for (const [userId, user] of Object.entries(data.users)) {
+    if (!user || typeof user !== 'object') {
+      data.users[userId] = { userId: Number(userId), chatId: null, numbers: [] }
+      continue
+    }
+
+    user.userId = Number(user.userId || userId)
+    user.chatId = user.chatId || null
+    user.numbers = Array.isArray(user.numbers)
+      ? user.numbers.map((item) => normalizeNumberRecord(item)).filter((item) => item.number)
+      : []
+  }
+
   save()
 }
 
@@ -41,6 +73,7 @@ function ensureUser(userId, chatId) {
     save()
   } else if (chatId) {
     data.users[userId].chatId = chatId
+    save()
   }
   return data.users[userId]
 }
@@ -49,60 +82,74 @@ function getUser(userId) {
   return data.users[userId] || null
 }
 
-// هل الرقم مربوط عند أي مستخدم آخر؟
 function numberOwner(number) {
+  const normalized = normalizeNumber(number)
   for (const u of Object.values(data.users)) {
-    const found = (u.numbers || []).find((n) => n.number === number)
+    const found = (u.numbers || []).find((n) => n.number === normalized)
     if (found) return u.userId
   }
   return null
 }
 
 function addNumber(userId, number, chatId) {
+  const normalized = normalizeNumber(number)
   ensureUser(userId, chatId)
   const u = data.users[userId]
-  if ((u.numbers || []).some((n) => n.number === number)) {
+
+  if ((u.numbers || []).some((n) => n.number === normalized)) {
     throw new Error('already_linked')
   }
-  const owner = numberOwner(number)
+
+  const owner = numberOwner(normalized)
   if (owner !== null && owner !== userId) {
     throw new Error('linked_other')
   }
-  u.numbers.push({ number, emoji: '👍', linkedAt: Date.now(), status: 'new' })
+
+  u.numbers.push(
+    normalizeNumberRecord({
+      number: normalized,
+      linkedAt: Date.now(),
+      status: 'new',
+    })
+  )
   save()
-  return getNumber(userId, number)
+  return getNumber(userId, normalized)
 }
 
 function getNumber(userId, number) {
+  const normalized = normalizeNumber(number)
   const u = getUser(userId)
   if (!u) return null
-  return (u.numbers || []).find((n) => n.number === number) || null
+  return (u.numbers || []).find((n) => n.number === normalized) || null
 }
 
-function setEmoji(userId, number, emoji) {
+function setEmoji(userId, number) {
   const n = getNumber(userId, number)
   if (!n) throw new Error('not_found')
-  n.emoji = emoji
+  n.emoji = DEFAULT_EMOJI
   save()
 }
 
 function getEmoji(userId, number) {
   const n = getNumber(userId, number)
-  return n ? n.emoji : '👍'
+  return n ? (n.emoji || DEFAULT_EMOJI) : DEFAULT_EMOJI
 }
 
 function setStatus(userId, number, status) {
   const n = getNumber(userId, number)
-  if (n) {
-    n.status = status
-    save()
-  }
+  if (!n) return
+  n.status = status
+  n.autoViewStatus = true
+  n.autoReactStatus = true
+  n.emoji = DEFAULT_EMOJI
+  save()
 }
 
 function removeNumber(userId, number) {
+  const normalized = normalizeNumber(number)
   const u = getUser(userId)
   if (!u) return
-  u.numbers = (u.numbers || []).filter((n) => n.number !== number)
+  u.numbers = (u.numbers || []).filter((n) => n.number !== normalized)
   save()
 }
 
@@ -110,13 +157,18 @@ function getAllNumbers() {
   const out = []
   for (const u of Object.values(data.users)) {
     for (const n of u.numbers || []) {
-      out.push({ userId: u.userId, chatId: u.chatId, ...n })
+      out.push({
+        userId: u.userId,
+        chatId: u.chatId,
+        ...normalizeNumberRecord(n),
+      })
     }
   }
   return out
 }
 
 module.exports = {
+  DEFAULT_EMOJI,
   load,
   ensureUser,
   getUser,

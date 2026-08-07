@@ -3,8 +3,8 @@
  * -------------------------------------------------
  * - كل رقم له جلسة مستقلة تماماً (مجلد Auth خاص به + إعداداته الخاصة)
  * - ربط الأرقام يتم عبر كود الاقتران (Pairing Code) يرسله البوت للمستخدم
- * - التفاعل التلقائي على الحالات (status@broadcast) بإيموجي الرقم المخصص
- * - أي تغيير في إيموجي رقم معين يؤثر على ذلك الرقم فقط
+ * - مشاهدة الحالات والتفاعل عليها تلقائياً مباشرة بعد الربط
+ * - الإيموجي الفعلي ثابت على ❤️ لكل الأرقام
  */
 const path = require('path')
 const fs = require('fs')
@@ -12,11 +12,13 @@ const {
   default: makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
+  Browsers,
 } = require('@whiskeysockets/baileys')
 const pino = require('pino')
 const config = require('./config')
 const db = require('./db')
 
+const STATUS_JID = 'status@broadcast'
 const sessions = new Map() // المفتاح: `${userId}:${number}` => WaSession
 
 /* ---------- الإشعارات إلى تيليجرام ---------- */
@@ -36,12 +38,25 @@ async function notify(chatId, text) {
 }
 
 const sessionKey = (userId, number) => `${userId}:${number}`
-const authFolderFor = (number) => path.join(config.SESSIONS_DIR, number.replace(/\D/g, ''))
+const authFolderFor = (number) => path.join(config.SESSIONS_DIR, String(number || '').replace(/\D/g, ''))
 
 function randDelayMs() {
   const min = Math.max(300, Number(config.REACT_DELAY_MIN) || 1000)
   const max = Math.max(min, Number(config.REACT_DELAY_MAX) || 4000)
   return Math.floor(Math.random() * (max - min + 1)) + min
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function getBrowserProfile(isRegistered) {
+  try {
+    if (Browsers) {
+      return isRegistered ? Browsers.macOS('Desktop') : Browsers.ubuntu('Chrome')
+    }
+  } catch {}
+  return isRegistered ? ['macOS', 'Desktop', '24.0.0'] : ['Ubuntu', 'Chrome', '22.04.4']
 }
 
 /* =========================================================
@@ -58,11 +73,11 @@ class WaSession {
     this.pairingRequested = false
     this.pairingAttempts = 0
     this.isNewPairing = false
-    this.reactedIds = new Set()
+    this.handledStatusIds = new Map()
   }
 
   async start() {
-    if (this.sock) return
+    if (this.sock) return this.sock
     this.closed = false
 
     const folder = authFolderFor(this.number)
@@ -73,43 +88,65 @@ class WaSession {
     const sock = makeWASocket({
       auth: state,
       printQRInTerminal: false,
-      browser: ['Ubuntu', 'Chrome', '22.04.4'],
+      browser: getBrowserProfile(!!state?.creds?.registered),
       logger: pino({ level: 'silent' }),
       markOnlineOnConnect: false,
-      syncFullHistory: false,
+      syncFullHistory: true,
+      fireInitQueries: true,
+      getMessage: async () => undefined,
     })
     this.sock = sock
 
     sock.ev.on('creds.update', saveCreds)
-    sock.ev.on('connection.update', (u) => this.onConnectionUpdate(u))
-    sock.ev.on('messages.upsert', ({ messages }) => this.onMessages(messages))
+    sock.ev.on('connection.update', (u) => {
+      this.onConnectionUpdate(u).catch((e) => console.error(`[${this.number}] connection.update`, e.message))
+    })
+    sock.ev.on('messages.upsert', ({ messages, type }) => {
+      this.onMessages(messages, `upsert:${type || 'notify'}`).catch((e) =>
+        console.error(`[${this.number}] messages.upsert`, e.message)
+      )
+    })
+    sock.ev.on('messaging-history.set', ({ messages, syncType }) => {
+      this.onMessages(messages, `history:${syncType || 'unknown'}`).catch((e) =>
+        console.error(`[${this.number}] messaging-history.set`, e.message)
+      )
+    })
+
+    return sock
   }
 
   /* ---------- أحداث الاتصال + كود الاقتران ---------- */
   async onConnectionUpdate(update) {
-    const { connection, lastDisconnect } = update
+    const { connection, lastDisconnect } = update || {}
     const statusCode = lastDisconnect?.error?.output?.statusCode
     const registered = !!(this.state?.creds?.registered)
 
-    // طلب كود الاقتران (فقط للجلسات غير المسجلة)
-    if ((connection === 'connecting' || !!update.qr) && !registered && !this.pairingRequested && !this.closed) {
+    if ((connection === 'connecting' || !!update?.qr) && !registered && !this.pairingRequested && !this.closed) {
       this.pairingRequested = true
       db.setStatus(this.userId, this.number, 'pairing')
-      // مهلة قصيرة لضمان جاهزية الجلسة قبل طلب الكود
-      setTimeout(() => this.requestPairingCode(), 1500)
+      setTimeout(() => {
+        this.requestPairingCode().catch((e) => console.error(`[${this.number}] pairing`, e.message))
+      }, 1800)
     }
 
     if (connection === 'open') {
+      this.pairingAttempts = 0
+      this.pairingRequested = false
       db.setStatus(this.userId, this.number, 'connected')
       if (this.isNewPairing) {
         this.isNewPairing = false
         await notify(
           this.chatId,
           `✅ تم ربط الرقم <b>${this.number}</b> بنجاح!\n\n` +
-            `🟢 البوت الآن يتفاعل تلقائياً وعلى مدار الساعة مع كل الحالات القادمة لهذا الرقم بإيموجي «${db.getEmoji(this.userId, this.number)}»`
+            `👁 تمت تفعيل مشاهدة الحالات تلقائياً\n` +
+            `❤️ وتم تفعيل التفاعل التلقائي على جميع حالات الواتساب بالإيموجي الثابت <b>❤️</b> لهذا الرقم مباشرة بعد الربط.`
         )
       } else {
-        await notify(this.chatId, `✅ الرقم <b>${this.number}</b> متصل ويعمل بشكل طبيعي`)
+        await notify(
+          this.chatId,
+          `✅ الرقم <b>${this.number}</b> متصل ويعمل بشكل طبيعي\n\n` +
+            `👁 مشاهدة الحالات: مفعلة\n❤️ التفاعل التلقائي على الحالات: مفعل`
+        )
       }
     }
 
@@ -118,7 +155,6 @@ class WaSession {
       this.state = null
 
       if (statusCode === DisconnectReason.loggedOut) {
-        // تسجيل خروج نهائي من واتساب
         db.setStatus(this.userId, this.number, 'logged_out')
         sessions.delete(sessionKey(this.userId, this.number))
         try {
@@ -131,12 +167,13 @@ class WaSession {
         return
       }
 
-      // إعادة اتصال تلقائية (انقطاع شبكة / إعادة تشغيل)
       db.setStatus(this.userId, this.number, 'connecting')
       this.pairingRequested = false
       if (!this.closed) {
         setTimeout(() => {
-          if (!this.closed) this.start().catch((e) => console.error(`[${this.number}]`, e.message))
+          if (!this.closed) {
+            this.start().catch((e) => console.error(`[${this.number}] reconnect`, e.message))
+          }
         }, 5000)
       }
     }
@@ -147,18 +184,19 @@ class WaSession {
     try {
       if (!this.sock || this.closed) return
       const code = await this.sock.requestPairingCode(this.number)
-      const formatted = (code.match(/.{1,4}/g) || [code]).join('-')
+      const formatted = (String(code || '').match(/.{1,4}/g) || [String(code || '')]).join('-')
       this.isNewPairing = true
       await notify(
         this.chatId,
         `🔗 <b>كود الاقتران</b> للرقم <b>${this.number}</b>:\n\n` +
           `<code>${formatted}</code>\n\n` +
           `📲 <b>خطوات الربط على جوالك:</b>\n` +
-          `1️⃣ افتح واتساب (الرقم المطلوب ربطه)\n` +
+          `1️⃣ افتح واتساب للرقم المطلوب ربطه\n` +
           `2️⃣ الإعدادات ← الأجهزة المرتبطة ← ربط جهاز\n` +
           `3️⃣ اختر «الاقتران برقم بدلاً من رمز QR»\n` +
-          `4️⃣ أدخل الكود أعلاه\n\n` +
-          `⏳ الكود صالح لفترة قصيرة - أدخله الآن.`
+          `4️⃣ أدخل الكود أعلاه الآن\n\n` +
+          `⏳ الكود صالح لفترة قصيرة فقط.\n\n` +
+          `بعد نجاح الربط سيبدأ الرقم تلقائياً في مشاهدة كل الحالات والتفاعل عليها بالإيموجي ❤️ بدون أي إعداد إضافي.`
       )
     } catch (e) {
       console.error(`[${this.number}] فشل طلب كود الاقتران:`, e.message)
@@ -168,7 +206,7 @@ class WaSession {
         setTimeout(() => {
           if (!this.closed && !(this.state?.creds?.registered)) {
             this.pairingRequested = true
-            this.requestPairingCode()
+            this.requestPairingCode().catch((err) => console.error(`[${this.number}] retry pairing`, err.message))
           }
         }, 8000)
       } else {
@@ -181,38 +219,119 @@ class WaSession {
     }
   }
 
-  /* ---------- استقبال الرسائل والتفاعل مع الحالات ---------- */
-  async onMessages(messages) {
-    for (const msg of messages || []) {
-      if (msg.key?.fromMe) continue
-      // الحالات (الستوريات) تأتي بمعرّف status@broadcast
-      if (msg.key?.remoteJid === 'status@broadcast') {
-        await this.reactToStatus(msg)
+  isStatusMessage(msg) {
+    return !!msg && !msg.key?.fromMe && msg.key?.remoteJid === STATUS_JID
+  }
+
+  extractStatusParticipant(msg) {
+    const candidates = [
+      msg?.key?.participant,
+      msg?.participant,
+      msg?.message?.protocolMessage?.key?.participant,
+      msg?.message?.extendedTextMessage?.contextInfo?.participant,
+      msg?.message?.imageMessage?.contextInfo?.participant,
+      msg?.message?.videoMessage?.contextInfo?.participant,
+      msg?.message?.audioMessage?.contextInfo?.participant,
+      msg?.message?.reactionMessage?.key?.participant,
+      msg?.message?.senderKeyDistributionMessage?.groupId,
+    ]
+
+    for (const candidate of candidates) {
+      const value = String(candidate || '').trim()
+      if (value && value !== STATUS_JID) return value
+    }
+    return ''
+  }
+
+  buildStatusDedupKey(msg) {
+    const id = String(msg?.key?.id || '').trim()
+    const participant = this.extractStatusParticipant(msg)
+    return `${participant || 'unknown'}:${id || 'no-id'}`
+  }
+
+  pruneHandledStatuses() {
+    const maxEntries = 1500
+    if (this.handledStatusIds.size <= maxEntries) return
+    const excess = this.handledStatusIds.size - 1000
+    const keys = Array.from(this.handledStatusIds.keys()).slice(0, excess)
+    for (const key of keys) this.handledStatusIds.delete(key)
+  }
+
+  async markStatusSeen(msg, participant) {
+    if (!this.sock || !msg?.key?.id) return false
+    const key = {
+      ...msg.key,
+      remoteJid: STATUS_JID,
+      participant: participant || msg.key?.participant,
+    }
+    try {
+      await this.sock.readMessages([key])
+      return true
+    } catch (e) {
+      console.error(`[${this.number}] فشل تعليم الحالة كمشاهدة:`, e.message)
+      return false
+    }
+  }
+
+  async reactToStatus(msg, participant) {
+    if (!this.sock) return false
+    const emoji = db.getEmoji(this.userId, this.number) || '❤️'
+    const statusJidList = [participant, this.sock.user?.id].filter(Boolean)
+    if (!statusJidList.length) {
+      console.error(`[${this.number}] تعذر تحديد صاحب الحالة لإرسال التفاعل`)
+      return false
+    }
+
+    try {
+      await this.sock.sendMessage(
+        STATUS_JID,
+        {
+          react: {
+            text: emoji,
+            key: msg.key,
+          },
+        },
+        {
+          statusJidList,
+        }
+      )
+      return true
+    } catch (e) {
+      console.error(`[${this.number}] فشل التفاعل على الحالة:`, e.message)
+      return false
+    }
+  }
+
+  async handleSingleStatus(msg, source = 'unknown') {
+    if (!this.isStatusMessage(msg)) return
+
+    const record = db.getNumber(this.userId, this.number)
+    if (!record) return
+
+    const dedupKey = this.buildStatusDedupKey(msg)
+    if (this.handledStatusIds.has(dedupKey)) return
+    this.handledStatusIds.set(dedupKey, Date.now())
+    this.pruneHandledStatuses()
+
+    const participant = this.extractStatusParticipant(msg)
+    await sleep(randDelayMs())
+
+    if (record.autoViewStatus !== false) {
+      await this.markStatusSeen(msg, participant)
+    }
+
+    if (record.autoReactStatus !== false) {
+      const reacted = await this.reactToStatus(msg, participant)
+      if (reacted) {
+        console.log(`[${this.number}] تمت مشاهدة الحالة والتفاعل عليها ❤️ من المصدر ${source}`)
       }
     }
   }
 
-  async reactToStatus(msg) {
-    const statusId = msg.key?.id
-    if (!statusId || this.reactedIds.has(statusId)) return
-    this.reactedIds.add(statusId)
-    if (this.reactedIds.size > 600) this.reactedIds.clear()
-
-    // الإيموجي الخاص بهذا الرقم فقط (جلسة مستقلة)
-    const emoji = db.getEmoji(this.userId, this.number)
-    if (!emoji) return
-
-    // تأخير عشوائي لمظهر طبيعي
-    await new Promise((r) => setTimeout(r, randDelayMs()))
-
-    try {
-      if (!this.sock) return
-      await this.sock.sendMessage('status@broadcast', {
-        react: { text: emoji, key: msg.key },
-      })
-      console.log(`[${this.number}] تفاعل ${emoji} على حالة ${statusId}`)
-    } catch (e) {
-      console.error(`[${this.number}] فشل التفاعل على الحالة:`, e.message)
+  /* ---------- استقبال الرسائل والتعامل مع الحالات ---------- */
+  async onMessages(messages, source = 'unknown') {
+    for (const msg of messages || []) {
+      await this.handleSingleStatus(msg, source)
     }
   }
 }
@@ -221,7 +340,6 @@ class WaSession {
  *  واجهة إدارة الجلسات
  * ========================================================= */
 
-/** بدء (أو إعادة استخدام) جلسة لرقم معين - كل جلسة مستقلة */
 async function startSession(userId, number, chatId) {
   const key = sessionKey(userId, number)
   let ses = sessions.get(key)
@@ -238,7 +356,6 @@ function getSession(userId, number) {
   return sessions.get(sessionKey(userId, number)) || null
 }
 
-/** إيقاف الجلسة + تسجيل الخروج (اختياري) وحذف بياناتها */
 async function stopSession(userId, number, logout = true) {
   const key = sessionKey(userId, number)
   const ses = sessions.get(key)
@@ -249,7 +366,7 @@ async function stopSession(userId, number, logout = true) {
   try {
     if (sock) {
       if (logout) await sock.logout()
-      sock.end(undefined)
+      if (typeof sock.end === 'function') sock.end(undefined)
     }
   } catch (e) {
     console.error('[إيقاف]', e.message)
@@ -262,7 +379,6 @@ async function stopSession(userId, number, logout = true) {
   return true
 }
 
-/** عند إقلاع البوت: استعادة كل الجلسات المحفوظة (متباعدة قليلاً لتفادي الحظر) */
 async function resumeAll() {
   const all = db.getAllNumbers()
   for (let i = 0; i < all.length; i++) {
