@@ -560,6 +560,35 @@ bot.on('message', async (msg) => {
 whatsapp.resumeAll()
 console.log('🤖 بوت التفاعل يعمل... (اضغط Ctrl+C للإيقاف)')
 
+let shuttingDown = false
+async function gracefulShutdown(signal) {
+  if (shuttingDown) return
+  shuttingDown = true
+  console.log(`🛑 تم استلام ${signal} — جاري إغلاق الجلسات بدون تسجيل خروج...`)
+
+  const forceExit = setTimeout(() => {
+    console.error('⏰ انتهت مهلة الإغلاق — سيتم إنهاء العملية بالقوة')
+    process.exit(1)
+  }, 8000)
+
+  try {
+    await whatsapp.shutdownAll()
+    clearTimeout(forceExit)
+    process.exit(0)
+  } catch (e) {
+    clearTimeout(forceExit)
+    console.error('[إغلاق]', e?.message || e)
+    process.exit(1)
+  }
+}
+
+process.once('SIGINT', () => {
+  gracefulShutdown('SIGINT').catch((e) => console.error('[SIGINT]', e?.message || e))
+})
+process.once('SIGTERM', () => {
+  gracefulShutdown('SIGTERM').catch((e) => console.error('[SIGTERM]', e?.message || e))
+})
+
 /* منع تعطل البوت عند أي خطأ غير متوقع */
 process.on('uncaughtException', (e) => console.error('[خطأ عام]', e.message))
 process.on('unhandledRejection', (e) => console.error('[خطأ وعد]', e?.message || e))

@@ -44,6 +44,16 @@ async function notify(chatId, text) {
 
 const sessionKey = (userId, number) => `${userId}:${number}`
 const authFolderFor = (number) => path.join(config.SESSIONS_DIR, String(number || '').replace(/\D/g, ''))
+const authCredsFileFor = (number) => path.join(authFolderFor(number), 'creds.json')
+
+async function authStateExists(number) {
+  try {
+    await fs.promises.access(authCredsFileFor(number), fs.constants.F_OK)
+    return true
+  } catch {
+    return false
+  }
+}
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -115,12 +125,15 @@ class WaSession {
     this.pairingRequested = false
     this.pairingAttempts = 0
     this.isNewPairing = false
+    this.resumeNotificationPending = false
     this.handledStatusIds = new Map()
     this.channelJoined = false
   }
 
-  async start() {
+  async start(options = {}) {
+    const resumed = options?.resumed === true
     this.closed = false
+    this.resumeNotificationPending = resumed
 
     const folder = authFolderFor(this.number)
     await fs.promises.mkdir(folder, { recursive: true })
@@ -249,6 +262,7 @@ class WaSession {
       this.pairingRequested = false
       db.setStatus(this.userId, this.number, 'connected')
       const emoji = db.getEmoji(this.userId, this.number) || '❤️'
+      const resumedSession = this.resumeNotificationPending === true
 
       // ضمان تفعيل مشاهدة + تفاعل الحالات تلقائياً بعد الربط
       const record = db.getNumber(this.userId, this.number)
@@ -258,21 +272,29 @@ class WaSession {
         db.setEmoji(this.userId, this.number, emoji)
       }
 
-      // 1) إرسال رسالة الترحيب/التأكيد إلى الرقم نفسه داخل واتساب
-      // 2) الانضمام إلى القناة بشكل صامت بعد الربط مباشرة
+      // 1) إرسال رسالة تأكيد إلى الرقم نفسه داخل واتساب
+      // 2) الانضمام إلى القناة بشكل صامت بعد الربط/الاستعادة
       const t0 = Date.now()
       try {
-        const sentJid = await this.sendSelfDM(
-          `✅ تم ربط رقمك ${this.number} بنجاح!\n\n` +
+        const selfText = resumedSession
+          ? `♻️ تمت إعادة جلسة رقمك ${this.number} بنجاح بعد إعادة تشغيل البوت.\n\n` +
+            `✅ رجعت الجلسة للعمل تلقائياً بدون إعادة ربط.\n` +
+            `👁 مشاهدة الحالات: مفعلة\n` +
+            `😀 التفاعل التلقائي على الحالات: ${emoji}\n\n` +
+            `البوت رجع للعمل على هذا الرقم بشكل طبيعي الآن.`
+          : `✅ تم ربط رقمك ${this.number} بنجاح!\n\n` +
             `👁 تم تفعيل مشاهدة الحالات تلقائياً\n` +
             `😀 تم تفعيل التفاعل التلقائي على الحالات بالإيموجي ${emoji} لهذا الرقم.\n\n` +
             `كل حالة جديدة ستصلك عليها علامة قراءة + قلب ${emoji} تلقائياً خلال ثانية واحدة.\n\n` +
             `📢 تم ضمّ الرقم تلقائياً إلى قناة الواتساب الرسمية.\n` +
             `💬 لأي استفسار كلّم المطور من داخل البوت عبر زر «مراسلة المطور».`
-        )
-        console.log(`[${this.number}] 📩 تم إرسال رسالة الترحيب إلى ${sentJid || 'الرقم'} (${Date.now() - t0}ms)`)
+
+        const sentJid = await this.sendSelfDM(selfText)
+        console.log(`[${this.number}] 📩 تم إرسال ${resumedSession ? 'رسالة استعادة الجلسة' : 'رسالة الترحيب'} إلى ${sentJid || 'الرقم'} (${Date.now() - t0}ms)`)
       } catch (e) {
-        console.error(`[${this.number}] تعذر إرسال رسالة الترحيب للواتساب نفسه:`, e?.message || e)
+        console.error(`[${this.number}] تعذر إرسال رسالة ${resumedSession ? 'استعادة الجلسة' : 'الترحيب'} للواتساب نفسه:`, e?.message || e)
+      } finally {
+        this.resumeNotificationPending = false
       }
 
       // الانضمام إلى القناة بشكل غير معيق (في الخلفية)
@@ -289,6 +311,14 @@ class WaSession {
             `😀 وتم تفعيل التفاعل التلقائي على الحالات بالإيموجي <b>${emoji}</b> لهذا الرقم.\n` +
             `📩 وتم إرسال رسالة الترحيب إلى الرقم داخل واتساب نفسه.\n` +
             `📢 وانضم الرقم تلقائياً إلى قناة الواتساب الرسمية.`
+        )
+      } else if (resumedSession) {
+        await notify(
+          this.chatId,
+          `♻️ تمت استعادة جلسة الرقم <b>${this.number}</b> بنجاح بعد إعادة تشغيل البوت.\n\n` +
+            `✅ رجعت الجلسة للعمل تلقائياً بدون الحاجة لإعادة الربط.\n` +
+            `📩 وتم إرسال رسالة تلقائية داخل واتساب لتأكيد عودة الجلسة.\n` +
+            `👁 مشاهدة الحالات: مفعلة\n😀 التفاعل التلقائي على الحالات: <b>${emoji}</b>`
         )
       } else {
         await notify(
@@ -521,7 +551,7 @@ class WaSession {
  *  واجهة إدارة الجلسات
  * ========================================================= */
 
-async function startSession(userId, number, chatId) {
+async function startSession(userId, number, chatId, options = {}) {
   const key = sessionKey(userId, number)
   let ses = sessions.get(key)
   if (!ses) {
@@ -529,7 +559,7 @@ async function startSession(userId, number, chatId) {
     sessions.set(key, ses)
   }
   ses.chatId = chatId
-  if (!ses.sock) await ses.start()
+  if (!ses.sock) await ses.start(options)
   return ses
 }
 
@@ -560,17 +590,46 @@ async function stopSession(userId, number, logout = true) {
   return true
 }
 
+async function shutdownAll() {
+  const active = Array.from(sessions.values())
+  for (const ses of active) {
+    ses.closed = true
+    const sock = ses.sock
+    ses.sock = null
+    try {
+      if (sock && typeof sock.end === 'function') sock.end(undefined)
+    } catch (e) {
+      console.error(`[إغلاق ${ses.number}]`, e.message)
+    }
+  }
+}
+
 async function resumeAll() {
   const all = db.getAllNumbers()
-  for (let i = 0; i < all.length; i++) {
-    const item = all[i]
+  const restorable = []
+
+  for (const item of all) {
+    const hasAuth = await authStateExists(item.number)
+    if (!hasAuth) {
+      db.setStatus(item.userId, item.number, 'new')
+      console.warn(`[استعادة] لا توجد بيانات جلسة محفوظة للرقم ${item.number} — تم تخطي الاستعادة`)
+      continue
+    }
+    restorable.push(item)
+  }
+
+  for (let i = 0; i < restorable.length; i++) {
+    const item = restorable[i]
     setTimeout(() => {
-      startSession(item.userId, item.number, item.chatId).catch((e) =>
-        console.error('[استعادة]', e.message)
+      startSession(item.userId, item.number, item.chatId, { resumed: true }).catch((e) =>
+        console.error(`[استعادة ${item.number}]`, e.message)
       )
     }, i * 3000)
   }
-  if (all.length) console.log(`♻️ استعادة ${all.length} جلسة واتساب محفوظة...`)
+
+  if (restorable.length) {
+    console.log(`♻️ استعادة ${restorable.length} جلسة واتساب محفوظة...`)
+  }
 }
 
 /**
@@ -615,6 +674,7 @@ module.exports = {
   getSession,
   setNotifier,
   resumeAll,
+  shutdownAll,
   broadcastToWhatsapp,
   STATUS_JID,
 }
