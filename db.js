@@ -3,6 +3,7 @@
  * - أرقام كل مستخدم مع إعدادات التفاعل الخاصة بكل رقم
  * - chatId لكل مستخدم لإرسال الإشعارات
  * - تفعيل مشاهدة الحالات والتفاعل عليها تلقائياً بشكل افتراضي
+ * - آخر رسالة لوحة تحكم /start لتحديثها تلقائياً
  */
 const fs = require('fs')
 const path = require('path')
@@ -19,11 +20,25 @@ function normalizeNumber(raw) {
 function normalizeNumberRecord(record = {}) {
   return {
     number: normalizeNumber(record.number),
-    emoji: DEFAULT_EMOJI,
+    emoji:
+      typeof record.emoji === 'string' && record.emoji.trim().length
+        ? record.emoji.trim()
+        : DEFAULT_EMOJI,
     linkedAt: Number(record.linkedAt || Date.now()),
     status: record.status || 'new',
-    autoViewStatus: true,
-    autoReactStatus: true,
+    autoViewStatus: record.autoViewStatus !== false,
+    autoReactStatus: record.autoReactStatus !== false,
+  }
+}
+
+function normalizeUserRecord(userId, user = {}) {
+  return {
+    userId: Number(user.userId || userId),
+    chatId: user.chatId || null,
+    dashboardMessageId: Number(user.dashboardMessageId || 0) || null,
+    numbers: Array.isArray(user.numbers)
+      ? user.numbers.map((item) => normalizeNumberRecord(item)).filter((item) => item.number)
+      : [],
   }
 }
 
@@ -41,16 +56,7 @@ function load() {
   if (!data.users || typeof data.users !== 'object') data.users = {}
 
   for (const [userId, user] of Object.entries(data.users)) {
-    if (!user || typeof user !== 'object') {
-      data.users[userId] = { userId: Number(userId), chatId: null, numbers: [] }
-      continue
-    }
-
-    user.userId = Number(user.userId || userId)
-    user.chatId = user.chatId || null
-    user.numbers = Array.isArray(user.numbers)
-      ? user.numbers.map((item) => normalizeNumberRecord(item)).filter((item) => item.number)
-      : []
+    data.users[userId] = normalizeUserRecord(userId, user)
   }
 
   save()
@@ -69,9 +75,9 @@ function save() {
 
 function ensureUser(userId, chatId) {
   if (!data.users[userId]) {
-    data.users[userId] = { userId, chatId: chatId || null, numbers: [] }
+    data.users[userId] = normalizeUserRecord(userId, { userId, chatId: chatId || null, numbers: [] })
     save()
-  } else if (chatId) {
+  } else if (chatId && data.users[userId].chatId !== chatId) {
     data.users[userId].chatId = chatId
     save()
   }
@@ -80,6 +86,31 @@ function ensureUser(userId, chatId) {
 
 function getUser(userId) {
   return data.users[userId] || null
+}
+
+function getUserByChatId(chatId) {
+  for (const user of Object.values(data.users)) {
+    if (user.chatId === chatId) return user
+  }
+  return null
+}
+
+function setDashboardMessage(userId, messageId) {
+  const user = ensureUser(userId)
+  user.dashboardMessageId = Number(messageId || 0) || null
+  save()
+  return user.dashboardMessageId
+}
+
+function getDashboardMessage(userId) {
+  return getUser(userId)?.dashboardMessageId || null
+}
+
+function clearDashboardMessage(userId) {
+  const user = getUser(userId)
+  if (!user) return
+  user.dashboardMessageId = null
+  save()
 }
 
 function numberOwner(number) {
@@ -110,6 +141,7 @@ function addNumber(userId, number, chatId) {
       number: normalized,
       linkedAt: Date.now(),
       status: 'new',
+      emoji: DEFAULT_EMOJI,
     })
   )
   save()
@@ -123,25 +155,24 @@ function getNumber(userId, number) {
   return (u.numbers || []).find((n) => n.number === normalized) || null
 }
 
-function setEmoji(userId, number) {
+function setEmoji(userId, number, emoji) {
   const n = getNumber(userId, number)
   if (!n) throw new Error('not_found')
-  n.emoji = DEFAULT_EMOJI
+  n.emoji =
+    typeof emoji === 'string' && emoji.trim().length ? emoji.trim() : DEFAULT_EMOJI
   save()
+  return n
 }
 
 function getEmoji(userId, number) {
   const n = getNumber(userId, number)
-  return n ? (n.emoji || DEFAULT_EMOJI) : DEFAULT_EMOJI
+  return n ? n.emoji || DEFAULT_EMOJI : DEFAULT_EMOJI
 }
 
 function setStatus(userId, number, status) {
   const n = getNumber(userId, number)
   if (!n) return
   n.status = status
-  n.autoViewStatus = true
-  n.autoReactStatus = true
-  n.emoji = DEFAULT_EMOJI
   save()
 }
 
@@ -172,6 +203,10 @@ module.exports = {
   load,
   ensureUser,
   getUser,
+  getUserByChatId,
+  setDashboardMessage,
+  getDashboardMessage,
+  clearDashboardMessage,
   addNumber,
   getNumber,
   setEmoji,

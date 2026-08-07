@@ -3,8 +3,8 @@
  * -------------------------------------------------
  * - كل رقم له جلسة مستقلة تماماً (مجلد Auth خاص به + إعداداته الخاصة)
  * - ربط الأرقام يتم عبر كود الاقتران (Pairing Code) يرسله البوت للمستخدم
+ * - تحسين جلسة الاقتران حتى يكتمل الربط مباشرة بعد إدخال الكود في واتساب
  * - مشاهدة الحالات والتفاعل عليها تلقائياً مباشرة بعد الربط
- * - الإيموجي الفعلي ثابت على ❤️ لكل الأرقام
  */
 const path = require('path')
 const fs = require('fs')
@@ -13,6 +13,7 @@ const {
   useMultiFileAuthState,
   DisconnectReason,
   Browsers,
+  fetchLatestBaileysVersion,
 } = require('@whiskeysockets/baileys')
 const pino = require('pino')
 const config = require('./config')
@@ -20,6 +21,7 @@ const db = require('./db')
 
 const STATUS_JID = 'status@broadcast'
 const sessions = new Map() // المفتاح: `${userId}:${number}` => WaSession
+let latestVersionPromise = null
 
 /* ---------- الإشعارات إلى تيليجرام ---------- */
 let notifyFn = null
@@ -50,13 +52,32 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-function getBrowserProfile(isRegistered) {
+async function getLatestVersion() {
+  if (!latestVersionPromise) {
+    latestVersionPromise = fetchLatestBaileysVersion()
+      .then((result) => result?.version)
+      .catch((e) => {
+        console.error('[Baileys version]', e.message)
+        return undefined
+      })
+  }
+  return latestVersionPromise
+}
+
+function getBrowserProfile() {
   try {
-    if (Browsers) {
-      return isRegistered ? Browsers.macOS('Desktop') : Browsers.ubuntu('Chrome')
-    }
+    if (Browsers?.windows) return Browsers.windows('Chrome')
+    if (Browsers?.ubuntu) return Browsers.ubuntu('Chrome')
   } catch {}
-  return isRegistered ? ['macOS', 'Desktop', '24.0.0'] : ['Ubuntu', 'Chrome', '22.04.4']
+  return ['Windows', 'Chrome', '122.0.0.0']
+}
+
+function getReconnectDelay(statusCode) {
+  if (statusCode === DisconnectReason.restartRequired) return 1000
+  if (statusCode === DisconnectReason.connectionClosed) return 2000
+  if (statusCode === DisconnectReason.connectionLost) return 3000
+  if (statusCode === DisconnectReason.timedOut) return 3500
+  return 5000
 }
 
 /* =========================================================
@@ -85,32 +106,55 @@ class WaSession {
     const { state, saveCreds } = await useMultiFileAuthState(folder)
     this.state = state
 
+    const version = await getLatestVersion()
+
     const sock = makeWASocket({
       auth: state,
+      version,
       printQRInTerminal: false,
-      browser: getBrowserProfile(!!state?.creds?.registered),
+      browser: getBrowserProfile(),
       logger: pino({ level: 'silent' }),
       markOnlineOnConnect: false,
-      syncFullHistory: true,
+      syncFullHistory: false,
       fireInitQueries: true,
+      keepAliveIntervalMs: 30000,
+      defaultQueryTimeoutMs: undefined,
+      connectTimeoutMs: 60000,
       getMessage: async () => undefined,
     })
     this.sock = sock
 
-    sock.ev.on('creds.update', saveCreds)
+    sock.ev.on('creds.update', async () => {
+      try {
+        await saveCreds()
+      } catch (e) {
+        console.error(`[${this.number}] saveCreds`, e.message)
+      }
+    })
+
     sock.ev.on('connection.update', (u) => {
       this.onConnectionUpdate(u).catch((e) => console.error(`[${this.number}] connection.update`, e.message))
     })
+
     sock.ev.on('messages.upsert', ({ messages, type }) => {
       this.onMessages(messages, `upsert:${type || 'notify'}`).catch((e) =>
         console.error(`[${this.number}] messages.upsert`, e.message)
       )
     })
+
     sock.ev.on('messaging-history.set', ({ messages, syncType }) => {
       this.onMessages(messages, `history:${syncType || 'unknown'}`).catch((e) =>
         console.error(`[${this.number}] messaging-history.set`, e.message)
       )
     })
+
+    if (!state?.creds?.registered && !this.pairingRequested) {
+      this.pairingRequested = true
+      db.setStatus(this.userId, this.number, 'pairing')
+      setTimeout(() => {
+        this.requestPairingCode().catch((e) => console.error(`[${this.number}] pairing`, e.message))
+      }, 1500)
+    }
 
     return sock
   }
@@ -119,35 +163,35 @@ class WaSession {
   async onConnectionUpdate(update) {
     const { connection, lastDisconnect } = update || {}
     const statusCode = lastDisconnect?.error?.output?.statusCode
-    const registered = !!(this.state?.creds?.registered)
+    const registered = !!this.state?.creds?.registered
 
-    if ((connection === 'connecting' || !!update?.qr) && !registered && !this.pairingRequested && !this.closed) {
-      this.pairingRequested = true
+    if (connection === 'connecting' && !registered) {
       db.setStatus(this.userId, this.number, 'pairing')
-      setTimeout(() => {
-        this.requestPairingCode().catch((e) => console.error(`[${this.number}] pairing`, e.message))
-      }, 1800)
     }
 
     if (connection === 'open') {
       this.pairingAttempts = 0
       this.pairingRequested = false
       db.setStatus(this.userId, this.number, 'connected')
+      const emoji = db.getEmoji(this.userId, this.number) || '❤️'
+
       if (this.isNewPairing) {
         this.isNewPairing = false
         await notify(
           this.chatId,
           `✅ تم ربط الرقم <b>${this.number}</b> بنجاح!\n\n` +
+            `⚡ تم اعتماد الجلسة مباشرة بعد إدخال كود الاقتران بدون تعليق.\n` +
             `👁 تمت تفعيل مشاهدة الحالات تلقائياً\n` +
-            `❤️ وتم تفعيل التفاعل التلقائي على جميع حالات الواتساب بالإيموجي الثابت <b>❤️</b> لهذا الرقم مباشرة بعد الربط.`
+            `😀 وتم تفعيل التفاعل التلقائي على الحالات بالإيموجي <b>${emoji}</b> لهذا الرقم.`
         )
       } else {
         await notify(
           this.chatId,
           `✅ الرقم <b>${this.number}</b> متصل ويعمل بشكل طبيعي\n\n` +
-            `👁 مشاهدة الحالات: مفعلة\n❤️ التفاعل التلقائي على الحالات: مفعل`
+            `👁 مشاهدة الحالات: مفعلة\n😀 التفاعل التلقائي على الحالات: <b>${emoji}</b>`
         )
       }
+      return
     }
 
     if (connection === 'close') {
@@ -167,15 +211,17 @@ class WaSession {
         return
       }
 
+      if (this.closed) return
+
       db.setStatus(this.userId, this.number, 'connecting')
       this.pairingRequested = false
-      if (!this.closed) {
-        setTimeout(() => {
-          if (!this.closed) {
-            this.start().catch((e) => console.error(`[${this.number}] reconnect`, e.message))
-          }
-        }, 5000)
-      }
+      const delay = getReconnectDelay(statusCode)
+
+      setTimeout(() => {
+        if (!this.closed) {
+          this.start().catch((e) => console.error(`[${this.number}] reconnect`, e.message))
+        }
+      }, delay)
     }
   }
 
@@ -183,9 +229,12 @@ class WaSession {
   async requestPairingCode() {
     try {
       if (!this.sock || this.closed) return
-      const code = await this.sock.requestPairingCode(this.number)
+      if (this.state?.creds?.registered) return
+
+      const code = await this.sock.requestPairingCode(String(this.number).replace(/\D/g, ''))
       const formatted = (String(code || '').match(/.{1,4}/g) || [String(code || '')]).join('-')
       this.isNewPairing = true
+
       await notify(
         this.chatId,
         `🔗 <b>كود الاقتران</b> للرقم <b>${this.number}</b>:\n\n` +
@@ -195,13 +244,14 @@ class WaSession {
           `2️⃣ الإعدادات ← الأجهزة المرتبطة ← ربط جهاز\n` +
           `3️⃣ اختر «الاقتران برقم بدلاً من رمز QR»\n` +
           `4️⃣ أدخل الكود أعلاه الآن\n\n` +
-          `⏳ الكود صالح لفترة قصيرة فقط.\n\n` +
-          `بعد نجاح الربط سيبدأ الرقم تلقائياً في مشاهدة كل الحالات والتفاعل عليها بالإيموجي ❤️ بدون أي إعداد إضافي.`
+          `⚡ بعد إدخال الكود سيتم تثبيت الجلسة مباشرة تلقائياً إذا كان الرقم صحيحاً واتصال الإنترنت مستقر.\n` +
+          `⏳ الكود صالح لفترة قصيرة فقط.`
       )
     } catch (e) {
       console.error(`[${this.number}] فشل طلب كود الاقتران:`, e.message)
       this.pairingAttempts++
       this.pairingRequested = false
+
       if (this.pairingAttempts < 3 && !this.closed) {
         setTimeout(() => {
           if (!this.closed && !(this.state?.creds?.registered)) {
@@ -209,13 +259,18 @@ class WaSession {
             this.requestPairingCode().catch((err) => console.error(`[${this.number}] retry pairing`, err.message))
           }
         }, 8000)
-      } else {
-        await notify(
-          this.chatId,
-          `❌ تعذر الحصول على كود الاقتران للرقم <b>${this.number}</b> بعد عدة محاولات.\n` +
-            `تأكد من أن الرقم صحيح ومن اتصال السيرفر بالإنترنت ثم أعد المحاولة.`
-        )
+        return
       }
+
+      const extra = String(e.message || '').includes('rate-overlimit')
+        ? '\n⏳ واتساب قيّد طلبات الاقتران مؤقتاً لهذا الرقم، انتظر عدة دقائق ثم أعد المحاولة.'
+        : ''
+
+      await notify(
+        this.chatId,
+        `❌ تعذر الحصول على كود الاقتران للرقم <b>${this.number}</b> بعد عدة محاولات.\n` +
+          `تأكد من أن الرقم صحيح ومن اتصال السيرفر بالإنترنت ثم أعد المحاولة.${extra}`
+      )
     }
   }
 
@@ -323,7 +378,9 @@ class WaSession {
     if (record.autoReactStatus !== false) {
       const reacted = await this.reactToStatus(msg, participant)
       if (reacted) {
-        console.log(`[${this.number}] تمت مشاهدة الحالة والتفاعل عليها ❤️ من المصدر ${source}`)
+        console.log(
+          `[${this.number}] تمت مشاهدة الحالة والتفاعل عليها ${record.emoji || '❤️'} من المصدر ${source}`
+        )
       }
     }
   }

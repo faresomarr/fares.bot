@@ -22,15 +22,6 @@ if (!config.TELEGRAM_TOKEN) {
 
 const bot = new TelegramBot(config.TELEGRAM_TOKEN, { polling: true })
 
-/* إرسال إشعارات الجلسات إلى تيليجرام */
-whatsapp.setNotifier(async (chatId, text) => {
-  try {
-    await bot.sendMessage(chatId, text, { parse_mode: 'HTML' })
-  } catch (e) {
-    console.error('[إشعار]', e.message)
-  }
-})
-
 /* حالة انتظار إدخال من المستخدم: chatId -> { action, userId, number? } */
 const pending = new Map()
 
@@ -39,15 +30,22 @@ function isAuthorized(userId) {
   return config.ADMIN_IDS.includes(userId)
 }
 
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
 function statusText(s) {
   const map = {
     new: '🆕 جديد',
     pairing: '🔗 بانتظار كود الاقتران',
-    connecting: '🔄 جاري الاتصال',
+    connecting: '🔄 جاري تسجيل الدخول',
     connected: '🟢 متصل',
     logged_out: '🔴 مسجل خروجه',
   }
-  return map[s] || s
+  return map[s] || escapeHtml(s)
 }
 
 function mainMenuKeyboard() {
@@ -62,6 +60,81 @@ function mainMenuKeyboard() {
     },
   }
 }
+
+function buildDashboardText(userId) {
+  const user = db.getUser(userId)
+  const numbers = user?.numbers || []
+  const lines = numbers.length
+    ? numbers
+        .map(
+          (n, i) =>
+            `${i + 1}. 📱 <b>${escapeHtml(n.number)}</b>\n` +
+            `   😀 إيموجي التفاعل: <b>${escapeHtml(n.emoji || '❤️')}</b>\n` +
+            `   📶 الحالة: ${statusText(n.status)}`
+        )
+        .join('\n\n')
+    : '— لا توجد أرقام مربوطة حالياً.'
+
+  return (
+    `👋 أهلًا بك في بوت التفاعل مع الحالات!\n\n` +
+    `📌 <b>ماذا يفعل البوت:</b>\n` +
+    `• تربط رقم واتساب عبر كود الاقتران من داخل البوت مباشرة\n` +
+    `• يتفاعل البوت تلقائياً وبشكل مستمر على حالات (ستوريات) جهات اتصالك\n` +
+    `• كل رقم له جلسة مستقلة وإيموجي تفاعل خاص به لا يتأثر بغيره\n\n` +
+    `📋 <b>الأرقام الحالية:</b>\n${lines}\n\n` +
+    `ℹ️ عند تغيير الإيموجي أو تغير حالة الاتصال سيتم تحديث هذه الرسالة تلقائياً.`
+  )
+}
+
+async function showDashboard(chatId, userId, options = {}) {
+  db.ensureUser(userId, chatId)
+  const text = buildDashboardText(userId)
+  const messageId = options.messageId || db.getDashboardMessage(userId)
+  const payload = { parse_mode: 'HTML', ...mainMenuKeyboard() }
+
+  if (messageId && !options.forceNew) {
+    try {
+      await bot.editMessageText(text, {
+        chat_id: chatId,
+        message_id: messageId,
+        ...payload,
+      })
+      db.setDashboardMessage(userId, messageId)
+      return { message_id: messageId, edited: true }
+    } catch (e) {
+      if (!String(e.message || '').includes('message is not modified')) {
+        db.clearDashboardMessage(userId)
+      }
+      if (String(e.message || '').includes('message is not modified')) {
+        return { message_id: messageId, edited: true }
+      }
+    }
+  }
+
+  const sent = await bot.sendMessage(chatId, text, payload)
+  db.setDashboardMessage(userId, sent.message_id)
+  return sent
+}
+
+async function refreshDashboardByChat(chatId) {
+  const user = db.getUserByChatId(chatId)
+  if (!user) return
+  try {
+    await showDashboard(chatId, user.userId)
+  } catch (e) {
+    console.error('[تحديث الواجهة]', e.message)
+  }
+}
+
+/* إرسال إشعارات الجلسات إلى تيليجرام */
+whatsapp.setNotifier(async (chatId, text) => {
+  try {
+    await bot.sendMessage(chatId, text, { parse_mode: 'HTML' })
+  } catch (e) {
+    console.error('[إشعار]', e.message)
+  }
+  await refreshDashboardByChat(chatId)
+})
 
 /* ربط رقم جديد: تحقق + حفظ + بدء الجلسة وإرسال كود الاقتران */
 async function linkNumber(chatId, userId, rawNumber) {
@@ -88,13 +161,17 @@ async function linkNumber(chatId, userId, rawNumber) {
         .catch(() => {})
     throw e
   }
+
+  await showDashboard(chatId, userId).catch(() => {})
+
   await bot
     .sendMessage(
       chatId,
-      `⏳ جاري تجهيز كود الاقتران للرقم <b>${number}</b>...\nسيصلك الكود خلال لحظات.`,
+      `⏳ جاري تجهيز كود الاقتران للرقم <b>${escapeHtml(number)}</b>...\nسيصلك الكود خلال لحظات.`,
       { parse_mode: 'HTML' }
     )
     .catch(() => {})
+
   whatsapp.startSession(userId, number, chatId).catch((e) => {
     console.error('[بدء الجلسة]', e.message)
     bot.sendMessage(chatId, '❌ تعذر بدء الجلسة: ' + e.message).catch(() => {})
@@ -102,24 +179,13 @@ async function linkNumber(chatId, userId, rawNumber) {
 }
 
 /* ---------- الأوامر ---------- */
-bot.onText(/\/start/, (msg) => {
+bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id
   const userId = msg.from.id
   if (!isAuthorized(userId))
     return bot.sendMessage(chatId, '⛔ أنت غير مصرح لك باستخدام هذا البوت.').catch(() => {})
   db.ensureUser(userId, chatId)
-  bot
-    .sendMessage(
-      chatId,
-      `👋 أهلًا بك في بوت التفاعل مع الحالات!\n\n` +
-        `📌 <b>ماذا يفعل البوت:</b>\n` +
-        `• تربط رقم واتساب عبر كود الاقتران من داخل البوت مباشرة\n` +
-        `• يتفاعل البوت تلقائياً وبشكل مستمر على حالات (ستوريات) جهات اتصالك\n` +
-        `• كل رقم له جلسة مستقلة وإيموجي تفاعل خاص به لا يتأثر بغيره\n\n` +
-        `اختر من القائمة 👇`,
-      { parse_mode: 'HTML', ...mainMenuKeyboard() }
-    )
-    .catch(() => {})
+  await showDashboard(chatId, userId, { forceNew: true }).catch(() => {})
 })
 
 /* ---------- الأزرار (Callback Queries) ---------- */
@@ -133,7 +199,6 @@ bot.on('callback_query', async (q) => {
   }
 
   try {
-    /* القائمة الرئيسية: تغيير الإيموجي */
     if (data === 'emoji_start') {
       bot.answerCallbackQuery(q.id).catch(() => {})
       const numbers = db.getUser(userId)?.numbers || []
@@ -143,15 +208,16 @@ bot.on('callback_query', async (q) => {
           .catch(() => {})
       }
       const kb = numbers.map((n) => [
-        { text: `📱 ${n.number}  ( ${n.emoji} )`, callback_data: `emoji:${n.number}` },
+        {
+          text: `📱 ${n.number}  ( ${n.emoji || '❤️'} )`,
+          callback_data: `emoji:${n.number}`,
+        },
       ])
       kb.push([{ text: '🔙 رجوع', callback_data: 'back' }])
       return bot
-        .sendMessage(
-          chatId,
-          '👇 اختر الرقم الذي تريد تغيير إيموجي التفاعل الخاص به:',
-          { reply_markup: { inline_keyboard: kb } }
-        )
+        .sendMessage(chatId, '👇 اختر الرقم الذي تريد تغيير إيموجي التفاعل الخاص به:', {
+          reply_markup: { inline_keyboard: kb },
+        })
         .catch(() => {})
     }
 
@@ -161,13 +227,12 @@ bot.on('callback_query', async (q) => {
       return bot
         .sendMessage(
           chatId,
-          `✍️ أرسل الآن الإيموجي الذي تريد التفاعل به على الحالات للرقم <b>${number}</b>\n\n(إيموجي واحد فقط - مثال: ❤️ 🔥 👍 😂 😮)`,
+          `✍️ أرسل الآن الإيموجي الذي تريد التفاعل به على الحالات للرقم <b>${escapeHtml(number)}</b>\n\n(إيموجي واحد فقط - مثال: ❤️ 🔥 👍 😂 😮)`,
           { parse_mode: 'HTML' }
         )
         .catch(() => {})
     }
 
-    /* ربط رقم جديد */
     if (data === 'link') {
       pending.set(chatId, { action: 'add_number', userId })
       return bot
@@ -180,7 +245,6 @@ bot.on('callback_query', async (q) => {
         .catch(() => {})
     }
 
-    /* قائمة الأرقام */
     if (data === 'list') {
       const numbers = db.getUser(userId)?.numbers || []
       if (!numbers.length) {
@@ -188,7 +252,8 @@ bot.on('callback_query', async (q) => {
       }
       const lines = numbers.map(
         (n, i) =>
-          `${i + 1}. 📱 <b>${n.number}</b>\n   الإيموجي: ${n.emoji} | الحالة: ${statusText(n.status)}`
+          `${i + 1}. 📱 <b>${escapeHtml(n.number)}</b>\n` +
+          `   😀 الإيموجي: <b>${escapeHtml(n.emoji || '❤️')}</b> | الحالة: ${statusText(n.status)}`
       )
       return bot
         .sendMessage(chatId, `📋 أرقامك المربوطة (${numbers.length}):\n\n${lines.join('\n\n')}`, {
@@ -197,13 +262,14 @@ bot.on('callback_query', async (q) => {
         .catch(() => {})
     }
 
-    /* حذف رقم */
     if (data === 'del_list') {
       const numbers = db.getUser(userId)?.numbers || []
       if (!numbers.length) {
         return bot.sendMessage(chatId, '⚠️ لا توجد أرقام لحذفها.').catch(() => {})
       }
-      const kb = numbers.map((n) => [{ text: `🗑 ${n.number}`, callback_data: `del:${n.number}` }])
+      const kb = numbers.map((n) => [
+        { text: `🗑 ${n.number}`, callback_data: `del:${n.number}` },
+      ])
       kb.push([{ text: '🔙 رجوع', callback_data: 'back' }])
       return bot
         .sendMessage(chatId, 'اختر الرقم لحذفه (سيتم تسجيل الخروج من واتساب):', {
@@ -217,7 +283,7 @@ bot.on('callback_query', async (q) => {
       return bot
         .sendMessage(
           chatId,
-          `⚠️ هل أنت متأكد من حذف الرقم <b>${number}</b>؟\nسيتم تسجيل الخروج من واتساب وحذف بيانات الجلسة نهائياً.`,
+          `⚠️ هل أنت متأكد من حذف الرقم <b>${escapeHtml(number)}</b>؟\nسيتم تسجيل الخروج من واتساب وحذف بيانات الجلسة نهائياً.`,
           {
             parse_mode: 'HTML',
             reply_markup: {
@@ -237,21 +303,18 @@ bot.on('callback_query', async (q) => {
       const number = data.slice(12)
       await whatsapp.stopSession(userId, number, true)
       db.removeNumber(userId, number)
-      return bot
-        .sendMessage(chatId, `🗑 تم حذف الرقم <b>${number}</b> وتسجيل الخروج من واتساب.`, {
+      await bot
+        .sendMessage(chatId, `🗑 تم حذف الرقم <b>${escapeHtml(number)}</b> وتسجيل الخروج من واتساب.`, {
           parse_mode: 'HTML',
         })
         .catch(() => {})
+      await showDashboard(chatId, userId).catch(() => {})
+      return
     }
 
     if (data === 'back') {
-      return bot
-        .editMessageText('القائمة الرئيسية 👇', {
-          chat_id: chatId,
-          message_id: q.message.message_id,
-          ...mainMenuKeyboard(),
-        })
-        .catch(() => {})
+      await showDashboard(chatId, userId, { messageId: q.message.message_id }).catch(() => {})
+      return
     }
   } catch (e) {
     console.error('[زر]', e.message)
@@ -264,7 +327,6 @@ bot.on('message', async (msg) => {
   const userId = msg.from.id
   if (!isAuthorized(userId) || !msg.text) return
 
-  /* أوامر نصية إضافية */
   if (msg.text.startsWith('/')) {
     const parts = msg.text.split(/\s+/)
     if (parts[0] === '/add') {
@@ -280,7 +342,9 @@ bot.on('message', async (msg) => {
         return bot.sendMessage(chatId, '⚠️ هذا الرقم غير مربوط بحسابك.').catch(() => {})
       await whatsapp.stopSession(userId, num, true)
       db.removeNumber(userId, num)
-      return bot.sendMessage(chatId, `🗑 تم حذف الرقم ${num}.`).catch(() => {})
+      await bot.sendMessage(chatId, `🗑 تم حذف الرقم ${escapeHtml(num)}.`).catch(() => {})
+      await showDashboard(chatId, userId).catch(() => {})
+      return
     }
     return
   }
@@ -288,13 +352,11 @@ bot.on('message', async (msg) => {
   const p = pending.get(chatId)
   if (!p) return
 
-  /* استقبال رقم جديد */
   if (p.action === 'add_number') {
     pending.delete(chatId)
     return linkNumber(chatId, userId, msg.text)
   }
 
-  /* استقبال إيموجي التفاعل والتطبيق الفوري على الرقم المحدد */
   if (p.action === 'set_emoji') {
     pending.delete(chatId)
     const m = msg.text.match(emojiRegex())
@@ -307,15 +369,17 @@ bot.on('message', async (msg) => {
         .catch(() => {})
     }
     try {
-      db.setEmoji(p.userId, p.number, m[0])
+      const emoji = m[0]
+      db.setEmoji(p.userId, p.number, emoji)
       await bot
         .sendMessage(
           chatId,
-          `✅ تم حفظ الإيموجي <b>${m[0]}</b> للرقم <b>${p.number}</b>.\n\n` +
-            `🟢 سيتم تطبيقه تلقائياً على كل الحالات القادمة لهذا الرقم فقط دون أي تأثير على الأرقام الأخرى.`,
+          `✅ تم حفظ الإيموجي <b>${escapeHtml(emoji)}</b> للرقم <b>${escapeHtml(p.number)}</b>.\n\n` +
+            `🟢 تم تطبيقه فوراً على هذا الرقم، وتم تحديث رسالة /start تلقائياً.`,
           { parse_mode: 'HTML' }
         )
         .catch(() => {})
+      await showDashboard(chatId, p.userId).catch(() => {})
     } catch (e) {
       await bot.sendMessage(chatId, '❌ الرقم غير موجود في حسابك.').catch(() => {})
     }
