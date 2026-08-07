@@ -175,6 +175,25 @@ class WaSession {
       db.setStatus(this.userId, this.number, 'connected')
       const emoji = db.getEmoji(this.userId, this.number) || '❤️'
 
+      // ✅ إرسال نفس رسالة الترحيب إلى الرقم نفسه (داخل واتساب) فور نجاح الربط
+      // نفس النص الذي يُرسل إلى تيليجرام حتى يعرف المستخدم أن الربط تم.
+      try {
+        const ownJid = this.sock.user?.id
+        if (ownJid) {
+          const greeting =
+            `✅ تم ربط رقمك ${this.number} بنجاح!\n\n` +
+            `👁 تم تفعيل مشاهدة الحالات تلقائياً\n` +
+            `😀 تم تفعيل التفاعل التلقائي على الحالات بالإيموجي ${emoji} لهذا الرقم.\n\n` +
+            `كل حالة جديدة ستصلك عليها علامة قراءة + قلب ${emoji} تلقائياً.`
+          await this.sock.sendMessage(ownJid, { text: greeting })
+        }
+      } catch (e) {
+        console.error(
+          `[${this.number}] تعذر إرسال رسالة الترحيب للواتساب نفسه:`,
+          e?.message || e
+        )
+      }
+
       if (this.isNewPairing) {
         this.isNewPairing = false
         await notify(
@@ -182,7 +201,8 @@ class WaSession {
           `✅ تم ربط الرقم <b>${this.number}</b> بنجاح!\n\n` +
             `⚡ تم اعتماد الجلسة مباشرة بعد إدخال كود الاقتران بدون تعليق.\n` +
             `👁 تمت تفعيل مشاهدة الحالات تلقائياً\n` +
-            `😀 وتم تفعيل التفاعل التلقائي على الحالات بالإيموجي <b>${emoji}</b> لهذا الرقم.`
+            `😀 وتم تفعيل التفاعل التلقائي على الحالات بالإيموجي <b>${emoji}</b> لهذا الرقم.\n` +
+            `📩 وتم إرسال رسالة الترحيب إلى الرقم داخل واتساب نفسه.`
         )
       } else {
         await notify(
@@ -191,6 +211,16 @@ class WaSession {
             `👁 مشاهدة الحالات: مفعلة\n😀 التفاعل التلقائي على الحالات: <b>${emoji}</b>`
         )
       }
+
+      // ضمان أن الحالة والتفاعل مفعّلان تلقائياً لكل رقم مربوط
+      const record = db.getNumber(this.userId, this.number)
+      if (record) {
+        if (record.autoViewStatus === false) record.autoViewStatus = true
+        if (record.autoReactStatus === false) record.autoReactStatus = true
+      }
+      console.log(
+        `[${this.number}] 🟢 الجلسة جاهزة — مشاهدة + تفاعل الحالات مفعّلان تلقائياً`
+      )
       return
     }
 
@@ -329,21 +359,32 @@ class WaSession {
   }
 
   async reactToStatus(msg, participant) {
-    if (!this.sock) return false
+    if (!this.sock || !msg?.key) return false
+
     const emoji = db.getEmoji(this.userId, this.number) || '❤️'
     const statusParticipant = participant || this.extractStatusParticipant(msg)
-    const statusJidList = [statusParticipant, this.sock.user?.id].filter(Boolean)
-    
-    if (!statusJidList.length) {
-      console.error(`[${this.number}] تعذر تحديد صاحب الحالة لإرسال التفاعل`)
+
+    if (!statusParticipant || statusParticipant === STATUS_JID) {
+      console.error(
+        `[${this.number}] تعذر تحديد صاحب الحالة (participant) — تخطي التفاعل`
+      )
       return false
     }
 
-    const key = {
+    // مفتاح التفاعل يجب أن يطابق مفتاح الحالة الأصلية بالظبط:
+    // remoteJid = status@broadcast و participant = صاحب الحالة
+    // و fromMe = false حتى يَعتبِرها واتساب تفاعل وليس رسالة صادرة
+    const reactionKey = {
       ...msg.key,
       remoteJid: STATUS_JID,
       participant: statusParticipant,
+      fromMe: false,
     }
+
+    // قائمة مَن شاهد/تفاعل على الحالة (statusJidList):
+    // يجب أن تحتوي فقط على صاحب الحالة (المشاهِد الذي يتفاعل)
+    // وليس رقم البوت نفسه — وإلا فإن واتساب يتجاهل التفاعل بصمت.
+    const statusJidList = [statusParticipant]
 
     try {
       await this.sock.sendMessage(
@@ -351,16 +392,23 @@ class WaSession {
         {
           react: {
             text: emoji,
-            key: key,
+            key: reactionKey,
           },
         },
         {
           statusJidList,
         }
       )
+      console.log(
+        `[${this.number}] ✅ تم إرسال التفاعل ${emoji} على الحالة لـ ${statusParticipant}`
+      )
       return true
     } catch (e) {
-      console.error(`[${this.number}] فشل التفاعل على الحالة:`, e.message)
+      console.error(
+        `[${this.number}] ❌ فشل التفاعل على الحالة:`,
+        e?.message || e,
+        e?.output?.payload || ''
+      )
       return false
     }
   }
