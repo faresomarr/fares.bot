@@ -32,10 +32,16 @@ async function notify(chatId, text) {
   }
 }
 
-const sessionKey = (userId, number) => `${userId}:${number}`
-const authSessionIdFor = (number) => `wa_session_${String(number || '').replace(/\D/g, '')}`
-const authFolderFor = (number) => path.join(config.SESSIONS_DIR, String(number || '').replace(/\D/g, ''))
-const authCredsFileFor = (number) => path.join(authFolderFor(number), 'creds.json')
+const normalizePhone = (number) => String(number || '').replace(/\D/g, '')
+const sessionKey = (userId, number) => `${Number(userId)}:${normalizePhone(number)}`
+// A session is owned by both the Telegram user and the WhatsApp number.
+// Never use a process-wide socket or a number-only auth directory.
+const sessionIdentity = (userId, number) => `${Number(userId)}_${normalizePhone(number)}`
+const authSessionIdFor = (userId, number) => `wa_session_${sessionIdentity(userId, number)}`
+const legacyAuthSessionIdFor = (number) => `wa_session_${normalizePhone(number)}`
+const authFolderFor = (userId, number) => path.join(config.SESSIONS_DIR, sessionIdentity(userId, number))
+const legacyAuthFolderFor = (number) => path.join(config.SESSIONS_DIR, normalizePhone(number))
+const authCredsFileFor = (userId, number) => path.join(authFolderFor(userId, number), 'creds.json')
 
 function fixAuthFileName(file) {
   return String(file || '')
@@ -43,73 +49,85 @@ function fixAuthFileName(file) {
     .replace(/:/g, '-')
 }
 
-async function readLocalAuthData(number, file) {
-  try {
-    const filePath = path.join(authFolderFor(number), fixAuthFileName(file))
-    const raw = await fs.promises.readFile(filePath, 'utf8')
-    return JSON.parse(raw, BufferJSON.reviver)
-  } catch {
-    return null
+async function readLocalAuthData(userId, number, file) {
+  const folders = [authFolderFor(userId, number), legacyAuthFolderFor(number)]
+  for (const folder of Array.from(new Set(folders))) {
+    try {
+      const filePath = path.join(folder, fixAuthFileName(file))
+      const raw = await fs.promises.readFile(filePath, 'utf8')
+      return JSON.parse(raw, BufferJSON.reviver)
+    } catch {}
   }
+  return null
 }
 
-async function writeLocalAuthData(number, file, value) {
-  const folder = authFolderFor(number)
+async function writeLocalAuthData(userId, number, file, value) {
+  const folder = authFolderFor(userId, number)
   await fs.promises.mkdir(folder, { recursive: true })
   const filePath = path.join(folder, fixAuthFileName(file))
-  await fs.promises.writeFile(filePath, JSON.stringify(value, BufferJSON.replacer))
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`
+  await fs.promises.writeFile(tempPath, JSON.stringify(value, BufferJSON.replacer))
+  await fs.promises.rename(tempPath, filePath)
 }
 
-async function removeLocalAuthData(number, file) {
+async function removeLocalAuthData(userId, number, file) {
   try {
-    const filePath = path.join(authFolderFor(number), fixAuthFileName(file))
+    const filePath = path.join(authFolderFor(userId, number), fixAuthFileName(file))
     await fs.promises.rm(filePath, { force: true })
   } catch {}
 }
 
-async function clearLocalAuthFolder(number) {
+async function clearLocalAuthFolder(userId, number) {
   try {
-    await fs.promises.rm(authFolderFor(number), { recursive: true, force: true })
+    await fs.promises.rm(authFolderFor(userId, number), { recursive: true, force: true })
+    // Remove the pre-isolation directory too, if it is no longer used.
+    await fs.promises.rm(legacyAuthFolderFor(number), { recursive: true, force: true })
   } catch {}
 }
 
-async function authStateExists(number) {
+async function authStateExists(userId, number) {
   if (db.isMongoEnabled()) {
-    const hasRemote = await db.hasWaAuthSession(authSessionIdFor(number))
-    if (hasRemote) return true
+    const hasRemote = await db.hasWaAuthSession(authSessionIdFor(userId, number))
+    const hasLegacyRemote = await db.hasWaAuthSession(legacyAuthSessionIdFor(number))
+    if (hasRemote || hasLegacyRemote) return true
   }
 
   try {
-    await fs.promises.access(authCredsFileFor(number), fs.constants.F_OK)
+    await fs.promises.access(authCredsFileFor(userId, number), fs.constants.F_OK)
+    return true
+  } catch {}
+  try {
+    await fs.promises.access(path.join(legacyAuthFolderFor(number), 'creds.json'), fs.constants.F_OK)
     return true
   } catch {
     return false
   }
 }
 
-async function usePersistentAuthState(number) {
-  const sessionId = authSessionIdFor(number)
-  await fs.promises.mkdir(authFolderFor(number), { recursive: true })
+async function usePersistentAuthState(userId, number) {
+  const sessionId = authSessionIdFor(userId, number)
+  await fs.promises.mkdir(authFolderFor(userId, number), { recursive: true })
 
   const readData = async (file) => {
     if (db.isMongoEnabled()) {
       const remoteValue = await db.getWaAuthFile(sessionId, file)
-      if (remoteValue) {
-        return remoteValue
-      }
+      if (remoteValue) return remoteValue
+      // One-time compatibility fallback for auth created before per-user isolation.
+      const legacyRemoteValue = await db.getWaAuthFile(legacyAuthSessionIdFor(number), file)
+      if (legacyRemoteValue) return legacyRemoteValue
     }
-    return readLocalAuthData(number, file)
+    return readLocalAuthData(userId, number, file)
   }
 
   const writeData = async (file, value) => {
-    await writeLocalAuthData(number, file, value)
+    await writeLocalAuthData(userId, number, file, value)
     if (db.isMongoEnabled()) {
       await db.setWaAuthFile(sessionId, file, value)
     }
   }
 
   const removeData = async (file) => {
-    await removeLocalAuthData(number, file)
+    await removeLocalAuthData(userId, number, file)
     if (db.isMongoEnabled()) {
       await db.removeWaAuthFile(sessionId, file)
     }
@@ -220,14 +238,26 @@ class WaSession {
     this.handledStatusIds = new Map()
     this.channelJoined = false
     this.suppressLoggedOutCleanup = false
+    this.startPromise = null
+    this.reconnectTimer = null
+    this.statusQueue = Promise.resolve()
+    this.socketGeneration = 0
   }
 
   async start(options = {}) {
+    if (this.closed) return null
+    if (this.startPromise) return this.startPromise
+    this.startPromise = this._start(options)
+    try { return await this.startPromise }
+    finally { this.startPromise = null }
+  }
+
+  async _start(options = {}) {
     const resumed = options?.resumed === true
     this.closed = false
     this.resumeNotificationPending = resumed
 
-    const { state, saveCreds } = await usePersistentAuthState(this.number)
+    const { state, saveCreds } = await usePersistentAuthState(this.userId, this.number)
     this.state = state
 
     const version = await getLatestVersion()
@@ -247,6 +277,7 @@ class WaSession {
       getMessage: async () => undefined,
     })
     this.sock = sock
+    const generation = ++this.socketGeneration
 
     sock.ev.on('creds.update', async () => {
       try {
@@ -257,7 +288,7 @@ class WaSession {
     })
 
     sock.ev.on('connection.update', (u) => {
-      this.onConnectionUpdate(u).catch((e) => console.error(`[${this.number}] connection.update`, e.message))
+      this.onConnectionUpdate(u, sock, generation).catch((e) => console.error(`[${this.number}] connection.update`, e.message))
     })
 
     sock.ev.on('messages.upsert', ({ messages, type }) => {
@@ -276,9 +307,10 @@ class WaSession {
   }
 
   async deleteSessionData() {
-    await clearLocalAuthFolder(this.number)
+    await clearLocalAuthFolder(this.userId, this.number)
     if (db.isMongoEnabled()) {
-      await db.clearWaAuthSession(authSessionIdFor(this.number))
+      await db.clearWaAuthSession(authSessionIdFor(this.userId, this.number))
+      await db.clearWaAuthSession(legacyAuthSessionIdFor(this.number))
     }
   }
 
@@ -341,7 +373,8 @@ class WaSession {
     )
   }
 
-  async onConnectionUpdate(update) {
+  async onConnectionUpdate(update, sourceSock, generation) {
+    if (sourceSock && (this.sock !== sourceSock || generation !== this.socketGeneration)) return
     const { connection, lastDisconnect } = update || {}
     const statusCode = lastDisconnect?.error?.output?.statusCode
     const registered = !!this.state?.creds?.registered
@@ -437,6 +470,7 @@ class WaSession {
     }
 
     if (connection === 'close') {
+      if (sourceSock && this.sock !== sourceSock) return
       this.sock = null
       this.state = null
 
@@ -456,8 +490,11 @@ class WaSession {
       db.incrementMetric('totalReconnects', 1)
       const delay = getReconnectDelay(statusCode)
 
-      setTimeout(() => {
-        if (!this.closed) {
+      if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
+      const reconnectGeneration = this.socketGeneration
+      this.reconnectTimer = setTimeout(() => {
+        this.reconnectTimer = null
+        if (!this.closed && this.socketGeneration === reconnectGeneration) {
           this.start().catch((e) => console.error(`[${this.number}] reconnect`, e.message))
         }
       }, delay)
@@ -625,18 +662,16 @@ class WaSession {
     this.pruneHandledStatuses()
 
     const participant = this.extractStatusParticipant(msg)
-    await sleep(80)
-
-    if (record.autoViewStatus !== false) {
-      await this.markStatusSeen(msg, participant)
-    }
-
-    if (record.autoReactStatus !== false) {
-      const reacted = await this.reactToStatus(msg, participant)
-      if (reacted) {
-        console.log(`[${this.number}] تمت مشاهدة الحالة والتفاعل عليها ${record.emoji || '❤️'} من المصدر ${source}`)
+    // Queue only this number's status work; other sessions never wait on this queue.
+    this.statusQueue = this.statusQueue.then(async () => {
+      await sleep(80)
+      if (record.autoViewStatus !== false) await this.markStatusSeen(msg, participant)
+      if (record.autoReactStatus !== false) {
+        const reacted = await this.reactToStatus(msg, participant)
+        if (reacted) console.log(`[${this.number}] تمت مشاهدة الحالة والتفاعل عليها ${record.emoji || '❤️'} من المصدر ${source}`)
       }
-    }
+    }).catch((e) => console.error(`[${this.number}] status handler`, e?.message || e))
+    await this.statusQueue
   }
 
   async onMessages(messages, source = 'unknown') {
@@ -703,7 +738,7 @@ async function resumeAll() {
   const restorable = []
 
   for (const item of all) {
-    const hasAuth = await authStateExists(item.number)
+    const hasAuth = await authStateExists(item.userId, item.number)
     if (!hasAuth) {
       db.removeNumber(item.userId, item.number)
       console.warn(`[استعادة] لا توجد بيانات جلسة محفوظة للرقم ${item.number} — تم حذف الرقم من القاعدة`)
