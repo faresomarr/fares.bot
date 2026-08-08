@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Fares Bot | المنصة الرسمية</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="bg-orb orb-1"></div>
+    <div class="bg-orb orb-2"></div>
+    <div class="bg-grid"></div>
+
+    <header class="topbar shell">
+      <div class="brand">
+        <div class="brand-badge">FB</div>
+        <div>
+          <strong id="siteTitle">Fares Bot</strong>
+          <p>منصة رسمية لإدارة الاستفسارات والإحصائيات</p>
+        </div>
+      </div>
+      <nav class="top-actions">
+        <a id="navTelegram" class="btn btn-soft" href="#" target="_blank" rel="noreferrer">بوت الربط</a>
+        <a id="navChannel" class="btn btn-soft" href="#" target="_blank" rel="noreferrer">قناة الواتساب</a>
+        <a class="btn btn-outline" href="/admin">لوحة المطور</a>
+      </nav>
+    </header>
+
+    <main class="shell layout">
+      <section class="hero card">
+        <div class="hero-copy">
+          <span class="eyebrow">واجهة فخمة + نظام تعليقات + إحصائيات مباشرة</span>
+          <h1>موقع متكامل لبوت <span>Fares Bot</span></h1>
+          <p id="siteDescription">
+            مكان واحد يعرض خدمات البوت، روابطه الرسمية، حالة التشغيل، التعليقات العامة، وردود المطور بشكل مباشر.
+          </p>
+
+          <div class="hero-actions">
+            <a id="heroTelegram" class="btn btn-primary" href="#" target="_blank" rel="noreferrer">تشغيل بوت الربط</a>
+            <a id="heroDeveloper" class="btn btn-secondary" href="#" target="_blank" rel="noreferrer">مراسلة المطور واتساب</a>
+          </div>
+
+          <div class="quick-links">
+            <a id="heroChannel" href="#" target="_blank" rel="noreferrer">قناة الواتساب</a>
+            <a id="heroWebsite" href="#" target="_blank" rel="noreferrer">رابط الموقع</a>
+          </div>
+        </div>
+
+        <div class="hero-panel glass">
+          <div class="hero-stat">
+            <span>الحالة الحالية</span>
+            <strong id="uptimeLabel">جاري التحميل...</strong>
+            <small>تحديث تلقائي كل 15 ثانية</small>
+          </div>
+          <div class="mini-stats">
+            <div>
+              <span>الأرقام المتصلة</span>
+              <strong id="connectedCount">0</strong>
+            </div>
+            <div>
+              <span>الجلسات النشطة</span>
+              <strong id="activeSessionsCount">0</strong>
+            </div>
+            <div>
+              <span>تعليقات بانتظار الرد</span>
+              <strong id="pendingCommentsCount">0</strong>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="grid-section">
+        <div class="stats-panel card">
+          <div class="section-head">
+            <div>
+              <span class="eyebrow">إحصائيات كاملة</span>
+              <h2>لوحة البوت المباشرة</h2>
+            </div>
+            <small id="lastUpdated">—</small>
+          </div>
+
+          <div class="stats-grid" id="statsGrid">
+            <article class="stat-card accent-blue"><span>المستخدمون</span><strong id="totalUsers">0</strong></article>
+            <article class="stat-card accent-purple"><span>إجمالي الأرقام</span><strong id="totalNumbers">0</strong></article>
+            <article class="stat-card accent-green"><span>المتصلة</span><strong id="connectedNumbers">0</strong></article>
+            <article class="stat-card accent-orange"><span>بانتظار الاقتران</span><strong id="pairingNumbers">0</strong></article>
+            <article class="stat-card accent-cyan"><span>منضمة للقناة</span><strong id="joinedChannel">0</strong></article>
+            <article class="stat-card accent-pink"><span>إجمالي التعليقات</span><strong id="totalComments">0</strong></article>
+            <article class="stat-card accent-gold"><span>مشاهدات الحالات</span><strong id="totalStatusViews">0</strong></article>
+            <article class="stat-card accent-red"><span>تفاعلات الحالات</span><strong id="totalStatusReactions">0</strong></article>
+          </div>
+
+          <div class="progress-wrap">
+            <div class="progress-card glass">
+              <div class="label-row"><span>نسبة الاتصال</span><strong id="connectedRateLabel">0%</strong></div>
+              <div class="progress-bar"><i id="connectedRateBar"></i></div>
+            </div>
+            <div class="progress-card glass">
+              <div class="label-row"><span>نسبة الانضمام للقناة</span><strong id="channelRateLabel">0%</strong></div>
+              <div class="progress-bar"><i id="channelRateBar"></i></div>
+            </div>
+            <div class="progress-card glass">
+              <div class="label-row"><span>نسبة الرد على التعليقات</span><strong id="replyRateLabel">0%</strong></div>
+              <div class="progress-bar"><i id="replyRateBar"></i></div>
+            </div>
+          </div>
+        </div>
+
+        <aside class="side-panel">
+          <section class="card links-card">
+            <div class="section-head compact">
+              <div>
+                <span class="eyebrow">الروابط الرسمية</span>
+                <h2>الوصول السريع</h2>
+              </div>
+            </div>
+            <div class="link-list">
+              <a id="linkTelegram" class="feature-link" href="#" target="_blank" rel="noreferrer">
+                <span>بوت الربط</span>
+                <strong>افتح البوت مباشرة</strong>
+              </a>
+              <a id="linkChannel" class="feature-link" href="#" target="_blank" rel="noreferrer">
+                <span>قناة الواتساب</span>
+                <strong>تابع التحديثات الرسمية</strong>
+              </a>
+              <a id="linkDeveloper" class="feature-link" href="#" target="_blank" rel="noreferrer">
+                <span>رقم المطور</span>
+                <strong id="developerNumberText">967773987296</strong>
+              </a>
+            </div>
+          </section>
+
+          <section class="card feature-card">
+            <div class="section-head compact">
+              <div>
+                <span class="eyebrow">مزايا الموقع</span>
+                <h2>ما الذي أضفناه؟</h2>
+              </div>
+            </div>
+            <ul class="feature-list">
+              <li>واجهة احترافية مرتبة ومتجاوبة على الجوال والكمبيوتر</li>
+              <li>قسم تعليقات عام مع ردود المطور بشكل مباشر</li>
+              <li>لوحة مطور خاصة للرد على التعليقات بسرعة</li>
+              <li>إحصائيات البوت يتم تحديثها لحظياً من نفس المشروع</li>
+              <li>رابط الموقع مهيأ ليظهر داخل الرسائل التلقائية للبوت</li>
+            </ul>
+          </section>
+        </aside>
+      </section>
+
+      <section class="comments-layout">
+        <section class="card comment-form-card">
+          <div class="section-head">
+            <div>
+              <span class="eyebrow">استفسار أو ملاحظة</span>
+              <h2>أرسل تعليقك للمطور</h2>
+            </div>
+          </div>
+
+          <form id="commentForm" class="comment-form">
+            <label>
+              <span>الاسم</span>
+              <input type="text" name="name" maxlength="80" placeholder="اسمك" required />
+            </label>
+            <label>
+              <span>وسيلة تواصل اختيارية</span>
+              <input type="text" name="contact" maxlength="160" placeholder="واتساب أو تيليجرام أو بريد" />
+            </label>
+            <label class="full">
+              <span>التعليق أو الاستفسار</span>
+              <textarea name="message" rows="6" maxlength="1200" placeholder="اكتب استفسارك أو ملاحظتك هنا" required></textarea>
+            </label>
+            <div class="form-actions full">
+              <button class="btn btn-primary" type="submit">إرسال التعليق</button>
+              <p id="formStatus" class="form-status"></p>
+            </div>
+          </form>
+        </section>
+
+        <section class="card comments-feed-card">
+          <div class="section-head">
+            <div>
+              <span class="eyebrow">التعليقات العامة</span>
+              <h2>آخر التعليقات والردود</h2>
+            </div>
+          </div>
+          <div id="commentsFeed" class="comments-feed empty-state">لا توجد تعليقات حتى الآن.</div>
+        </section>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
