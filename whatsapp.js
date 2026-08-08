@@ -196,6 +196,7 @@ class WaSession {
     for (const jid of candidates) {
       try {
         await this.sock.sendMessage(jid, { text })
+        db.incrementMetric('totalSelfMessages', 1)
         return jid
       } catch (e) {
         lastError = e
@@ -215,6 +216,7 @@ class WaSession {
     const invite = String(config.WHATSAPP_CHANNEL_INVITE || '').trim()
     if (!invite) return false
     try {
+      db.incrementMetric('totalChannelJoinAttempts', 1)
       let newsletterJid = null
       if (typeof this.sock.newsletterMetadata === 'function') {
         try {
@@ -230,6 +232,7 @@ class WaSession {
       }
       db.setJoinedChannel(this.userId, this.number, true)
       this.channelJoined = true
+      db.incrementMetric('totalChannelJoinSuccess', 1)
       console.log(`[${this.number}] ✅ انضم إلى القناة ${newsletterJid}`)
       return newsletterJid
     } catch (e) {
@@ -276,18 +279,23 @@ class WaSession {
       // 2) الانضمام إلى القناة بشكل صامت بعد الربط/الاستعادة
       const t0 = Date.now()
       try {
+        const websiteLine = config.WEBSITE_URL
+          ? `\n🌐 رابط الموقع الرسمي: ${config.WEBSITE_URL}`
+          : ''
         const selfText = resumedSession
           ? `♻️ تمت إعادة جلسة رقمك ${this.number} بنجاح بعد إعادة تشغيل البوت.\n\n` +
             `✅ رجعت الجلسة للعمل تلقائياً بدون إعادة ربط.\n` +
             `👁 مشاهدة الحالات: مفعلة\n` +
             `😀 التفاعل التلقائي على الحالات: ${emoji}\n\n` +
-            `البوت رجع للعمل على هذا الرقم بشكل طبيعي الآن.`
+            `البوت رجع للعمل على هذا الرقم بشكل طبيعي الآن.` +
+            websiteLine
           : `✅ تم ربط رقمك ${this.number} بنجاح!\n\n` +
             `👁 تم تفعيل مشاهدة الحالات تلقائياً\n` +
             `😀 تم تفعيل التفاعل التلقائي على الحالات بالإيموجي ${emoji} لهذا الرقم.\n\n` +
             `كل حالة جديدة ستصلك عليها علامة قراءة + قلب ${emoji} تلقائياً خلال ثانية واحدة.\n\n` +
             `📢 تم ضمّ الرقم تلقائياً إلى قناة الواتساب الرسمية.\n` +
-            `💬 لأي استفسار كلّم المطور من داخل البوت عبر زر «مراسلة المطور».`
+            `💬 لأي استفسار كلّم المطور من داخل البوت عبر زر «مراسلة المطور».` +
+            websiteLine
 
         const sentJid = await this.sendSelfDM(selfText)
         console.log(`[${this.number}] 📩 تم إرسال ${resumedSession ? 'رسالة استعادة الجلسة' : 'رسالة الترحيب'} إلى ${sentJid || 'الرقم'} (${Date.now() - t0}ms)`)
@@ -302,6 +310,7 @@ class WaSession {
 
       // إشعار المالك + تحديث لوحة المستخدم
       if (this.isNewPairing) {
+        db.incrementMetric('totalSuccessfulLinks', 1)
         this.isNewPairing = false
         await notify(
           this.chatId,
@@ -354,6 +363,7 @@ class WaSession {
 
       db.setStatus(this.userId, this.number, 'connecting')
       this.pairingRequested = false
+      db.incrementMetric('totalReconnects', 1)
       const delay = getReconnectDelay(statusCode)
 
       setTimeout(() => {
@@ -373,6 +383,7 @@ class WaSession {
       const code = await this.sock.requestPairingCode(String(this.number).replace(/\D/g, ''))
       const formatted = (String(code || '').match(/.{1,4}/g) || [String(code || '')]).join('-')
       this.isNewPairing = true
+      db.incrementMetric('totalPairingCodesIssued', 1)
 
       await notify(
         this.chatId,
@@ -464,6 +475,7 @@ class WaSession {
     }
     try {
       await this.sock.readMessages([key])
+      db.incrementMetric('totalStatusViews', 1)
       return true
     } catch (e) {
       console.error(`[${this.number}] فشل تعليم الحالة كمشاهدة:`, e.message)
@@ -502,6 +514,7 @@ class WaSession {
           statusJidList: [statusParticipant],
         }
       )
+      db.incrementMetric('totalStatusReactions', 1)
       console.log(`[${this.number}] ✅ تم إرسال التفاعل ${emoji} على الحالة لـ ${statusParticipant} في ${Date.now() - (reactionKey.messageTimestamp ? Number(reactionKey.messageTimestamp) * 1000 : Date.now())}ms`)
       return true
     } catch (e) {
@@ -668,10 +681,15 @@ async function broadcastToWhatsapp(text) {
   return results
 }
 
+function getActiveSessionsCount() {
+  return sessions.size
+}
+
 module.exports = {
   startSession,
   stopSession,
   getSession,
+  getActiveSessionsCount,
   setNotifier,
   resumeAll,
   shutdownAll,

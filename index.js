@@ -17,6 +17,7 @@ const emojiRegex = require('emoji-regex')
 const config = require('./config')
 const db = require('./db')
 const whatsapp = require('./whatsapp')
+const web = require('./web')
 
 // تحميل قاعدة البيانات أولاً
 db.load()
@@ -28,9 +29,19 @@ if (!config.TELEGRAM_TOKEN) {
 }
 
 const bot = new TelegramBot(config.TELEGRAM_TOKEN, { polling: true })
+const APP_STARTED_AT = Date.now()
 
 /* حالة انتظار إدخال من المستخدم: chatId -> { action, userId, number? } */
 const pending = new Map()
+
+function getRuntimeStats() {
+  return {
+    uptimeMs: Date.now() - APP_STARTED_AT,
+    startedAt: APP_STARTED_AT,
+    activeSessions: whatsapp.getActiveSessionsCount(),
+    siteUrl: config.WEBSITE_URL,
+  }
+}
 
 function isAuthorized(userId) {
   if (!config.ONLY_ADMINS) return true
@@ -60,22 +71,28 @@ function statusText(s) {
 }
 
 function mainMenuKeyboard() {
+  const inline_keyboard = [
+    [
+      { text: '➕ ربط رقم جديد', callback_data: 'link' },
+      { text: '😀 تغيير إيموجي التفاعل', callback_data: 'emoji_start' },
+    ],
+    [
+      { text: '📋 أرقامي المربوطة', callback_data: 'list' },
+      { text: '🗑 حذف رقم', callback_data: 'del_list' },
+    ],
+    [
+      { text: '👨‍💻 مراسلة المطور', url: config.DEVELOPER_WHATSAPP_URL },
+      { text: '📢 قناة الواتساب', url: config.WHATSAPP_CHANNEL_URL },
+    ],
+  ]
+
+  if (config.WEBSITE_URL) {
+    inline_keyboard.push([{ text: '🌐 موقع البوت', url: config.WEBSITE_URL }])
+  }
+
   return {
     reply_markup: {
-      inline_keyboard: [
-        [
-          { text: '➕ ربط رقم جديد', callback_data: 'link' },
-          { text: '😀 تغيير إيموجي التفاعل', callback_data: 'emoji_start' },
-        ],
-        [
-          { text: '📋 أرقامي المربوطة', callback_data: 'list' },
-          { text: '🗑 حذف رقم', callback_data: 'del_list' },
-        ],
-        [
-          { text: '👨‍💻 مراسلة المطور', url: `https://wa.me/${config.DEVELOPER_WHATSAPP}` },
-          { text: '📢 قناة الواتساب', url: config.WHATSAPP_CHANNEL_URL },
-        ],
-      ],
+      inline_keyboard,
     },
   }
 }
@@ -109,8 +126,9 @@ function buildDashboardText(userId) {
 ` +
     `📋 <b>الأرقام الحالية:</b>\n${lines}\n\n` +
     `ℹ️ عند تغيير الإيموجي أو تغير حالة الاتصال سيتم تحديث هذه الرسالة تلقائياً.\n\n` +
-    `💬 <b>مراسلة المطور:</b> ${escapeHtml(`https://wa.me/${config.DEVELOPER_WHATSAPP}`)}\n` +
-    `📢 <b>قناة الواتساب:</b> ${escapeHtml(config.WHATSAPP_CHANNEL_URL)}`
+    `💬 <b>مراسلة المطور:</b> ${escapeHtml(config.DEVELOPER_WHATSAPP_URL)}\n` +
+    `📢 <b>قناة الواتساب:</b> ${escapeHtml(config.WHATSAPP_CHANNEL_URL)}\n` +
+    `🌐 <b>موقع البوت:</b> ${escapeHtml(config.WEBSITE_URL)}`
   )
 }
 
@@ -405,16 +423,28 @@ bot.on('callback_query', async (q) => {
     if (data === 'adm:stats') {
       if (!isDeveloper(userId))
         return bot.answerCallbackQuery(q.id, { text: '⛔ للمطور فقط' }).catch(() => {})
-      const s = db.getStats()
+      const s = db.getStats(getRuntimeStats())
       const txt =
         `📊 <b>إحصائيات البوت</b>\n\n` +
-        `👥 مستخدمين البوت: <b>${s.totalUsers}</b>\n` +
+        `👥 مستخدمو البوت: <b>${s.totalUsers}</b>\n` +
         `📱 إجمالي الأرقام: <b>${s.totalNumbers}</b>\n` +
         `🟢 متصلة: <b>${s.connected}</b>\n` +
         `🔄 قيد الاتصال: <b>${s.connecting}</b>\n` +
         `🔗 بانتظار كود الاقتران: <b>${s.pairing}</b>\n` +
         `🔴 مسجل خروجها: <b>${s.loggedOut}</b>\n` +
-        `📢 منضمة للقناة: <b>${s.channelJoined}</b>`
+        `📢 منضمة للقناة: <b>${s.channelJoined}</b> (${s.channelJoinRate}%)\n\n` +
+        `🌐 الموقع: <b>${escapeHtml(s.runtime.siteUrl || config.WEBSITE_URL)}</b>\n` +
+        `⚙️ الجلسات النشطة حالياً: <b>${s.runtime.activeSessions}</b>\n` +
+        `⏱ مدة التشغيل: <b>${Math.floor((s.runtime.uptimeMs || 0) / 60000)}</b> دقيقة\n\n` +
+        `👁 إجمالي مشاهدات الحالات: <b>${s.metrics.totalStatusViews}</b>\n` +
+        `😀 إجمالي تفاعلات الحالات: <b>${s.metrics.totalStatusReactions}</b>\n` +
+        `🔐 أكواد اقتران صادرة: <b>${s.metrics.totalPairingCodesIssued}</b>\n` +
+        `✅ عمليات ربط ناجحة: <b>${s.metrics.totalSuccessfulLinks}</b>\n` +
+        `🔁 عمليات إعادة اتصال: <b>${s.metrics.totalReconnects}</b>\n` +
+        `📩 رسائل تلقائية داخل واتساب: <b>${s.metrics.totalSelfMessages}</b>\n\n` +
+        `💬 التعليقات بالموقع: <b>${s.comments.totalComments}</b>\n` +
+        `🕒 بانتظار الرد: <b>${s.comments.pendingReplies}</b>\n` +
+        `✅ تم الرد عليها: <b>${s.comments.repliedComments}</b>`
       await bot.sendMessage(chatId, txt, { parse_mode: 'HTML' }).catch(() => {})
       return bot.answerCallbackQuery(q.id).catch(() => {})
     }
@@ -509,6 +539,8 @@ bot.on('message', async (msg) => {
       /* تفادي flood */
       await new Promise((r) => setTimeout(r, 50))
     }
+    db.incrementMetric('totalBroadcastsTelegram', 1)
+    db.incrementMetric('totalBroadcastRecipientsTelegram', sent)
     await bot
       .sendMessage(
         chatId,
@@ -531,6 +563,8 @@ bot.on('message', async (msg) => {
       })
       .catch(() => {})
     const res = await whatsapp.broadcastToWhatsapp(text)
+    db.incrementMetric('totalBroadcastsWhatsapp', 1)
+    db.incrementMetric('totalBroadcastRecipientsWhatsapp', res.sent)
     const detailLines = res.details
       .slice(0, 30)
       .map(
@@ -557,6 +591,7 @@ bot.on('message', async (msg) => {
 })
 
 /* ---------- الإقلاع ---------- */
+web.startWebServer({ getRuntimeStats })
 whatsapp.resumeAll()
 console.log('🤖 بوت التفاعل يعمل... (اضغط Ctrl+C للإيقاف)')
 
