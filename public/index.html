@@ -3,10 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Fares Bot | المنصة الرسمية</title>
+    <title>Fares Bot | منصة اقتران واتساب</title>
+    <meta
+      name="description"
+      content="منصة فخمة ومميزة لربط واتساب عبر كود الاقتران، متابعة حالة الجلسات، عرض الإحصائيات، واستقبال التعليقات والتحديثات الرسمية."
+    />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -16,15 +20,19 @@
 
     <header class="topbar shell">
       <div class="brand">
-        <div class="brand-badge">FB</div>
+        <div class="brand-avatar-wrap">
+          <img class="brand-avatar" src="/hero-image.jpg" alt="صورة Fares Bot" />
+        </div>
         <div>
           <strong id="siteTitle">Fares Bot</strong>
-          <p>منصة رسمية لإدارة الاستفسارات والإحصائيات</p>
+          <p>منصة اقتران واتساب رسمية بتصميم فاخر ومرتب</p>
         </div>
       </div>
+
       <nav class="top-actions">
-        <a id="navTelegram" class="btn btn-soft" href="#" target="_blank" rel="noreferrer">بوت الربط</a>
-        <a id="navChannel" class="btn btn-soft" href="#" target="_blank" rel="noreferrer">قناة الواتساب</a>
+        <a id="navPairing" class="btn btn-primary" href="#" target="_blank" rel="noreferrer">ابدأ الاقتران</a>
+        <a id="navChannel" class="btn btn-soft" href="#" target="_blank" rel="noreferrer">قناة التحديثات</a>
+        <a id="navDeveloper" class="btn btn-outline" href="#" target="_blank" rel="noreferrer">واتساب المطور</a>
         <a class="btn btn-outline" href="/admin">لوحة المطور</a>
       </nav>
     </header>
@@ -32,43 +40,126 @@
     <main class="shell layout">
       <section class="hero card">
         <div class="hero-copy">
-          <span class="eyebrow">واجهة فخمة + نظام تعليقات + إحصائيات مباشرة</span>
-          <h1>موقع متكامل لبوت <span>Fares Bot</span></h1>
+          <span class="eyebrow">ربط سريع • واجهة فخمة • إحصائيات مباشرة</span>
+          <h1>موقع اقتران واتساب <span>فخم ومميز ومرتب</span> لبوت Fares Bot</h1>
           <p id="siteDescription">
-            مكان واحد يعرض خدمات البوت، روابطه الرسمية، حالة التشغيل، التعليقات العامة، وردود المطور بشكل مباشر.
+            منصة أنيقة تعرض طريقة ربط واتساب عبر كود الاقتران، مع وصول سريع للبوت، قسم تعليقات مباشر، إحصائيات لحظية، وروابط المطور الرسمية.
           </p>
 
           <div class="hero-actions">
-            <a id="heroTelegram" class="btn btn-primary" href="#" target="_blank" rel="noreferrer">تشغيل بوت الربط</a>
+            <a id="heroPairing" class="btn btn-primary" href="#" target="_blank" rel="noreferrer">تشغيل بوت الاقتران</a>
             <a id="heroDeveloper" class="btn btn-secondary" href="#" target="_blank" rel="noreferrer">مراسلة المطور واتساب</a>
           </div>
 
-          <div class="quick-links">
-            <a id="heroChannel" href="#" target="_blank" rel="noreferrer">قناة الواتساب</a>
+          <div class="quick-links quick-links-hero">
+            <a id="heroChannel" href="#" target="_blank" rel="noreferrer">قناة تحديثات البوت</a>
             <a id="heroWebsite" href="#" target="_blank" rel="noreferrer">رابط الموقع</a>
+          </div>
+
+          <div class="hero-highlights">
+            <div class="highlight-chip">⚡ كود اقتران سريع</div>
+            <div class="highlight-chip">🔐 جلسات مستقلة وآمنة</div>
+            <div class="highlight-chip">📊 متابعة فورية للحالة</div>
           </div>
         </div>
 
-        <div class="hero-panel glass">
-          <div class="hero-stat">
-            <span>الحالة الحالية</span>
-            <strong id="uptimeLabel">جاري التحميل...</strong>
-            <small>تحديث تلقائي كل 15 ثانية</small>
-          </div>
-          <div class="mini-stats">
-            <div>
-              <span>الأرقام المتصلة</span>
-              <strong id="connectedCount">0</strong>
+        <div class="hero-visual">
+          <div class="portrait-card glass">
+            <img class="portrait-image" src="/hero-image.jpg" alt="صورة البوت في أعلى الموقع" />
+            <div class="portrait-caption">
+              <span>الواجهة الرسمية</span>
+              <strong>Fares Bot</strong>
+              <p>جاهز لربط واتساب بسهولة عبر كود الاقتران.</p>
             </div>
-            <div>
+          </div>
+
+          <div class="status-stack">
+            <article class="floating-card glass">
+              <span>الحالة الحالية</span>
+              <strong id="uptimeLabel">جاري التحميل...</strong>
+              <small>تحديث تلقائي كل 15 ثانية</small>
+            </article>
+            <article class="floating-card glass">
               <span>الجلسات النشطة</span>
               <strong id="activeSessionsCount">0</strong>
-            </div>
-            <div>
-              <span>تعليقات بانتظار الرد</span>
-              <strong id="pendingCommentsCount">0</strong>
-            </div>
+              <small>أداء مباشر من المشروع نفسه</small>
+            </article>
           </div>
+        </div>
+      </section>
+
+      <section class="pairing-showcase">
+        <div class="showcase-grid">
+          <article class="card showcase-main">
+            <div class="section-head compact">
+              <div>
+                <span class="eyebrow">آلية الربط</span>
+                <h2>كيف يتم اقتران واتساب؟</h2>
+              </div>
+            </div>
+
+            <div class="steps-grid">
+              <div class="step-card">
+                <div class="step-index">01</div>
+                <h3>افتح بوت الاقتران</h3>
+                <p>ابدأ من زر البوت ليتم تجهيز طلب الربط للرقم المطلوب بسرعة.</p>
+              </div>
+              <div class="step-card">
+                <div class="step-index">02</div>
+                <h3>أدخل رقم واتساب</h3>
+                <p>أرسل الرقم داخل البوت ليتم إنشاء كود اقتران خاص وآمن لنفس الجلسة.</p>
+              </div>
+              <div class="step-card">
+                <div class="step-index">03</div>
+                <h3>انسخ كود الاقتران</h3>
+                <p>يصلك الكود مباشرة مع خطوات الربط على هاتفك بشكل مرتب وواضح.</p>
+              </div>
+              <div class="step-card">
+                <div class="step-index">04</div>
+                <h3>أكمل الربط من واتساب</h3>
+                <p>من الأجهزة المرتبطة اختر الاقتران برقم، ثم أكمل التفعيل بكل سهولة.</p>
+              </div>
+            </div>
+          </article>
+
+          <aside class="card pairing-side">
+            <div class="section-head compact">
+              <div>
+                <span class="eyebrow">الوصول السريع</span>
+                <h2>روابطك الرسمية</h2>
+              </div>
+            </div>
+
+            <div class="link-list">
+              <a id="linkPairing" class="feature-link feature-link-accent" href="#" target="_blank" rel="noreferrer">
+                <span>منصة الاقتران</span>
+                <strong>ابدأ ربط واتساب الآن</strong>
+              </a>
+              <a id="linkChannel" class="feature-link" href="#" target="_blank" rel="noreferrer">
+                <span>قناة تحديثات البوت</span>
+                <strong>تابع آخر المستجدات والإعلانات</strong>
+              </a>
+              <a id="linkDeveloper" class="feature-link" href="#" target="_blank" rel="noreferrer">
+                <span>واتساب المطور</span>
+                <strong id="developerNumberText">967773987296</strong>
+              </a>
+            </div>
+
+            <div class="mini-stats mini-stats-side">
+              <div>
+                <span>الأرقام المتصلة</span>
+                <strong id="connectedCount">0</strong>
+              </div>
+              <div>
+                <span>بانتظار الرد</span>
+                <strong id="pendingCommentsCount">0</strong>
+              </div>
+              <div>
+                <span>جهوزية الخدمة</span>
+                <strong>24/7</strong>
+              </div>
+            </div>
+          </aside>
         </div>
       </section>
 
@@ -76,8 +167,8 @@
         <div class="stats-panel card">
           <div class="section-head">
             <div>
-              <span class="eyebrow">إحصائيات كاملة</span>
-              <h2>لوحة البوت المباشرة</h2>
+              <span class="eyebrow">إحصائيات مباشرة</span>
+              <h2>لوحة حالة البوت</h2>
             </div>
             <small id="lastUpdated">—</small>
           </div>
@@ -110,43 +201,40 @@
         </div>
 
         <aside class="side-panel">
-          <section class="card links-card">
-            <div class="section-head compact">
-              <div>
-                <span class="eyebrow">الروابط الرسمية</span>
-                <h2>الوصول السريع</h2>
-              </div>
-            </div>
-            <div class="link-list">
-              <a id="linkTelegram" class="feature-link" href="#" target="_blank" rel="noreferrer">
-                <span>بوت الربط</span>
-                <strong>افتح البوت مباشرة</strong>
-              </a>
-              <a id="linkChannel" class="feature-link" href="#" target="_blank" rel="noreferrer">
-                <span>قناة الواتساب</span>
-                <strong>تابع التحديثات الرسمية</strong>
-              </a>
-              <a id="linkDeveloper" class="feature-link" href="#" target="_blank" rel="noreferrer">
-                <span>رقم المطور</span>
-                <strong id="developerNumberText">967773987296</strong>
-              </a>
-            </div>
-          </section>
-
           <section class="card feature-card">
             <div class="section-head compact">
               <div>
                 <span class="eyebrow">مزايا الموقع</span>
-                <h2>ما الذي أضفناه؟</h2>
+                <h2>لماذا هذا الموقع مميز؟</h2>
               </div>
             </div>
             <ul class="feature-list">
-              <li>واجهة احترافية مرتبة ومتجاوبة على الجوال والكمبيوتر</li>
-              <li>قسم تعليقات عام مع ردود المطور بشكل مباشر</li>
-              <li>لوحة مطور خاصة للرد على التعليقات بسرعة</li>
-              <li>إحصائيات البوت يتم تحديثها لحظياً من نفس المشروع</li>
-              <li>رابط الموقع مهيأ ليظهر داخل الرسائل التلقائية للبوت</li>
+              <li>تصميم فاخر ومرتب يركز على تجربة ربط واتساب من أول نظرة.</li>
+              <li>عرض الصورة المرفوعة في أعلى الموقع بشكل أنيق وواضح.</li>
+              <li>وصول سريع إلى بوت الاقتران، قناة التحديثات، وواتساب المطور.</li>
+              <li>لوحة إحصائيات مباشرة مرتبطة بنفس بيانات المشروع.</li>
+              <li>قسم تعليقات عام مع إمكانية رد المطور من لوحة الإدارة.</li>
             </ul>
+          </section>
+
+          <section class="card rights-card">
+            <div class="section-head compact">
+              <div>
+                <span class="eyebrow">حقوق الموقع</span>
+                <h2>الروابط الرسمية</h2>
+              </div>
+            </div>
+
+            <div class="rights-links">
+              <a id="rightsChannel" class="rights-link" href="#" target="_blank" rel="noreferrer">
+                <span>قناه تحديثات البوت</span>
+                <strong>https://whatsapp.com/channel/0029Vb8jjfWCRs1sVz0x1w3v</strong>
+              </a>
+              <a id="rightsDeveloper" class="rights-link" href="#" target="_blank" rel="noreferrer">
+                <span>واتساب المطور</span>
+                <strong>967773987296</strong>
+              </a>
+            </div>
           </section>
         </aside>
       </section>
@@ -191,6 +279,17 @@
         </section>
       </section>
     </main>
+
+    <footer class="site-footer shell">
+      <div class="footer-copy">
+        <strong>جميع الحقوق محفوظة © Fares Bot</strong>
+        <p>تصميم واجهة اقتران واتساب أنيقة مع الروابط الرسمية في نهاية الموقع.</p>
+      </div>
+      <div class="footer-links">
+        <a id="footerChannel" href="#" target="_blank" rel="noreferrer">قناه تحديثات البوت</a>
+        <a id="footerDeveloper" href="#" target="_blank" rel="noreferrer">واتساب المطور</a>
+      </div>
+    </footer>
 
     <script src="/app.js"></script>
   </body>

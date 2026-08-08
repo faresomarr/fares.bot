@@ -46,15 +46,20 @@ function formatDuration(ms) {
 
 function renderConfig(config) {
   state.config = config
-  document.title = `${config.siteTitle} | المنصة الرسمية`
+  document.title = `${config.siteTitle} | منصة اقتران واتساب`
   setText('siteTitle', config.siteTitle)
   setText('siteDescription', config.siteDescription)
   setText('developerNumberText', config.developerWhatsappNumber)
 
-  ;['navTelegram', 'heroTelegram', 'linkTelegram'].forEach((id) => setHref(id, config.telegramBotUrl))
-  ;['navChannel', 'heroChannel', 'linkChannel'].forEach((id) => setHref(id, config.whatsappChannelUrl))
-  ;['heroDeveloper', 'linkDeveloper'].forEach((id) => setHref(id, config.developerWhatsappUrl))
-  setHref('heroWebsite', config.websiteUrl)
+  const pairingUrl = config.pairingBotUrl || config.telegramBotUrl || '#'
+  const channelUrl = config.whatsappChannelUrl || '#'
+  const developerUrl = config.developerWhatsappUrl || '#'
+  const websiteUrl = config.websiteUrl || '#'
+
+  ;['navPairing', 'heroPairing', 'linkPairing'].forEach((id) => setHref(id, pairingUrl))
+  ;['navChannel', 'heroChannel', 'linkChannel', 'rightsChannel', 'footerChannel'].forEach((id) => setHref(id, channelUrl))
+  ;['navDeveloper', 'heroDeveloper', 'linkDeveloper', 'rightsDeveloper', 'footerDeveloper'].forEach((id) => setHref(id, developerUrl))
+  setHref('heroWebsite', websiteUrl)
 }
 
 function setProgress(idBar, idLabel, value) {
