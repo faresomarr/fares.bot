@@ -1,6 +1,8 @@
 const fs = require('fs')
 const path = require('path')
 const crypto = require('crypto')
+const { MongoClient } = require('mongodb')
+const { BufferJSON } = require('@whiskeysockets/baileys')
 const config = require('./config')
 
 const DEFAULT_EMOJI = '❤️'
@@ -22,15 +24,34 @@ const DEFAULT_METRICS = {
   totalBroadcastRecipientsWhatsapp: 0,
 }
 
+const DEFAULT_SETTINGS = {
+  startMessage:
+    '👋 أهلًا بك في بوت التفاعل مع الحالات!\n\n' +
+    '📌 <b>ماذا يفعل البوت:</b>\n' +
+    '• تربط رقم واتساب عبر كود الاقتران من داخل البوت مباشرة\n' +
+    '• يتفاعل البوت تلقائياً وبشكل مستمر على حالات (ستوريات) جهات اتصالك خلال ثانية واحدة\n' +
+    '• كل رقم له جلسة مستقلة وإيموجي تفاعل خاص به لا يتأثر بغيره\n' +
+    '• بعد نجاح الربط:\n' +
+    '↪️ يصل تأكيد للرقم داخل واتساب نفسه\n' +
+    '↪️ ينضم الرقم تلقائياً إلى قناة الواتساب الرسمية',
+}
+
 let data = {
   users: {},
   comments: [],
   metrics: { ...DEFAULT_METRICS },
+  settings: { ...DEFAULT_SETTINGS },
   meta: {
     createdAt: Date.now(),
     updatedAt: Date.now(),
   },
 }
+
+let mongoClient = null
+let mongoDb = null
+let stateCollection = null
+let authCollection = null
+let writeQueue = Promise.resolve()
 
 function normalizeNumber(raw) {
   return String(raw || '').replace(/\D/g, '')
@@ -106,6 +127,15 @@ function normalizeMetrics(metrics = {}) {
   return out
 }
 
+function normalizeSettings(settings = {}) {
+  return {
+    startMessage:
+      typeof settings.startMessage === 'string' && settings.startMessage.trim().length
+        ? settings.startMessage.trim()
+        : DEFAULT_SETTINGS.startMessage,
+  }
+}
+
 function ensureStructure() {
   if (!data || typeof data !== 'object') data = {}
   if (!data.users || typeof data.users !== 'object') data.users = {}
@@ -114,6 +144,7 @@ function ensureStructure() {
   if (!data.meta.createdAt) data.meta.createdAt = Date.now()
   if (!data.meta.updatedAt) data.meta.updatedAt = Date.now()
   data.metrics = normalizeMetrics(data.metrics)
+  data.settings = normalizeSettings(data.settings)
 
   for (const [userId, user] of Object.entries(data.users)) {
     data.users[userId] = normalizeUserRecord(userId, user)
@@ -125,26 +156,7 @@ function ensureStructure() {
     .sort((a, b) => b.createdAt - a.createdAt)
 }
 
-function load() {
-  try {
-    if (fs.existsSync(file)) {
-      data = JSON.parse(fs.readFileSync(file, 'utf8'))
-    }
-  } catch (e) {
-    console.error('⚠️ خطأ في قراءة قاعدة البيانات:', e.message)
-    data = {
-      users: {},
-      comments: [],
-      metrics: { ...DEFAULT_METRICS },
-      meta: { createdAt: Date.now(), updatedAt: Date.now() },
-    }
-  }
-
-  ensureStructure()
-  save()
-}
-
-function save() {
+function writeLocalFile() {
   try {
     touch()
     fs.mkdirSync(path.dirname(file), { recursive: true })
@@ -152,7 +164,110 @@ function save() {
     fs.writeFileSync(tmp, JSON.stringify(data, null, 2))
     fs.renameSync(tmp, file)
   } catch (e) {
-    console.error('⚠️ خطأ في حفظ قاعدة البيانات:', e.message)
+    console.error('⚠️ خطأ في حفظ قاعدة البيانات المحلية:', e.message)
+  }
+}
+
+function queueWrite(task) {
+  writeQueue = writeQueue
+    .then(() => task())
+    .catch((e) => {
+      console.error('⚠️ خطأ في مزامنة قاعدة البيانات:', e.message)
+    })
+  return writeQueue
+}
+
+async function connectMongoIfNeeded() {
+  if (!config.MONGODB_URI) return false
+  if (mongoDb && stateCollection && authCollection) return true
+
+  mongoClient = new MongoClient(config.MONGODB_URI, {
+    ignoreUndefined: true,
+    maxPoolSize: 10,
+  })
+
+  await mongoClient.connect()
+  mongoDb = mongoClient.db(config.MONGODB_DB_NAME)
+  stateCollection = mongoDb.collection('app_state')
+  authCollection = mongoDb.collection('wa_auth_state')
+
+  await Promise.all([
+    stateCollection.createIndex({ updatedAt: 1 }),
+    authCollection.createIndex({ sessionId: 1, file: 1 }, { unique: true }),
+    authCollection.createIndex({ sessionId: 1, updatedAt: -1 }),
+  ])
+
+  return true
+}
+
+async function saveRemoteState() {
+  if (!stateCollection) return
+  touch()
+  await stateCollection.updateOne(
+    { _id: 'main' },
+    {
+      $set: {
+        payload: data,
+        updatedAt: new Date(),
+      },
+      $setOnInsert: {
+        createdAt: new Date(),
+      },
+    },
+    { upsert: true }
+  )
+}
+
+function save() {
+  writeLocalFile()
+  if (stateCollection) {
+    queueWrite(async () => {
+      await saveRemoteState()
+    })
+  }
+}
+
+async function load() {
+  let localLoaded = false
+  try {
+    if (fs.existsSync(file)) {
+      data = JSON.parse(fs.readFileSync(file, 'utf8'))
+      localLoaded = true
+    }
+  } catch (e) {
+    console.error('⚠️ خطأ في قراءة قاعدة البيانات المحلية:', e.message)
+  }
+
+  ensureStructure()
+
+  const hasMongo = await connectMongoIfNeeded().catch((e) => {
+    console.error('⚠️ فشل الاتصال بقاعدة MongoDB:', e.message)
+    return false
+  })
+
+  if (hasMongo) {
+    const remote = await stateCollection.findOne({ _id: 'main' })
+    if (remote?.payload && typeof remote.payload === 'object') {
+      data = remote.payload
+      ensureStructure()
+      writeLocalFile()
+    } else {
+      if (!localLoaded) {
+        data = {
+          users: {},
+          comments: [],
+          metrics: { ...DEFAULT_METRICS },
+          settings: { ...DEFAULT_SETTINGS },
+          meta: { createdAt: Date.now(), updatedAt: Date.now() },
+        }
+        ensureStructure()
+      }
+      await saveRemoteState()
+    }
+  } else if (!localLoaded) {
+    writeLocalFile()
+  } else {
+    writeLocalFile()
   }
 }
 
@@ -169,6 +284,13 @@ function ensureUser(userId, chatId) {
 
 function getUser(userId) {
   return data.users[userId] || null
+}
+
+function listUsers() {
+  return Object.values(data.users).map((user) => ({
+    ...user,
+    numbers: (user.numbers || []).map((number) => ({ ...number })),
+  }))
 }
 
 function getUserByChatId(chatId) {
@@ -270,9 +392,12 @@ function setJoinedChannel(userId, number, value) {
 function removeNumber(userId, number) {
   const normalized = normalizeNumber(number)
   const u = getUser(userId)
-  if (!u) return
+  if (!u) return false
+  const before = (u.numbers || []).length
   u.numbers = (u.numbers || []).filter((n) => n.number !== normalized)
-  save()
+  const removed = before !== u.numbers.length
+  if (removed) save()
+  return removed
 }
 
 function getAllNumbers() {
@@ -319,6 +444,25 @@ function setMetric(name, value) {
   data.metrics[name] = Number(value || 0)
   save()
   return data.metrics[name]
+}
+
+function getStartMessage() {
+  ensureStructure()
+  return data.settings.startMessage || DEFAULT_SETTINGS.startMessage
+}
+
+function setStartMessage(text) {
+  ensureStructure()
+  const cleaned = String(text || '').trim()
+  data.settings.startMessage = cleaned || DEFAULT_SETTINGS.startMessage
+  save()
+  return data.settings.startMessage
+}
+
+function resetStartMessage() {
+  data.settings.startMessage = DEFAULT_SETTINGS.startMessage
+  save()
+  return data.settings.startMessage
 }
 
 function addComment({ name, contact, message }) {
@@ -437,11 +581,97 @@ function getStats(runtime = {}) {
   }
 }
 
+function serializeAuthPayload(payload) {
+  return JSON.stringify(payload, BufferJSON.replacer)
+}
+
+function deserializeAuthPayload(raw) {
+  if (!raw) return null
+  return JSON.parse(raw, BufferJSON.reviver)
+}
+
+async function setWaAuthFile(sessionId, fileName, value) {
+  if (!authCollection) return false
+  await queueWrite(async () => {
+    await authCollection.updateOne(
+      { sessionId: String(sessionId), file: String(fileName) },
+      {
+        $set: {
+          payload: serializeAuthPayload(value),
+          updatedAt: new Date(),
+        },
+        $setOnInsert: {
+          createdAt: new Date(),
+        },
+      },
+      { upsert: true }
+    )
+  })
+  return true
+}
+
+async function getWaAuthFile(sessionId, fileName) {
+  if (!authCollection) return null
+  const doc = await authCollection.findOne(
+    { sessionId: String(sessionId), file: String(fileName) },
+    { projection: { payload: 1 } }
+  )
+  return deserializeAuthPayload(doc?.payload)
+}
+
+async function removeWaAuthFile(sessionId, fileName) {
+  if (!authCollection) return false
+  await queueWrite(async () => {
+    await authCollection.deleteOne({ sessionId: String(sessionId), file: String(fileName) })
+  })
+  return true
+}
+
+async function clearWaAuthSession(sessionId) {
+  if (!authCollection) return false
+  await queueWrite(async () => {
+    await authCollection.deleteMany({ sessionId: String(sessionId) })
+  })
+  return true
+}
+
+async function hasWaAuthSession(sessionId) {
+  if (!authCollection) return false
+  const count = await authCollection.countDocuments({ sessionId: String(sessionId), file: 'creds.json' }, { limit: 1 })
+  return count > 0
+}
+
+function isMongoEnabled() {
+  return Boolean(stateCollection && authCollection)
+}
+
+async function flush() {
+  await writeQueue
+}
+
+async function close() {
+  try {
+    await flush()
+  } finally {
+    if (mongoClient) {
+      await mongoClient.close()
+      mongoClient = null
+      mongoDb = null
+      stateCollection = null
+      authCollection = null
+    }
+  }
+}
+
 module.exports = {
   DEFAULT_EMOJI,
   load,
+  save,
+  flush,
+  close,
   ensureUser,
   getUser,
+  listUsers,
   getUserByChatId,
   setDashboardMessage,
   getDashboardMessage,
@@ -460,9 +690,18 @@ module.exports = {
   getMetrics,
   incrementMetric,
   setMetric,
+  getStartMessage,
+  setStartMessage,
+  resetStartMessage,
   addComment,
   getCommentById,
   replyToComment,
   listComments,
   getCommentStats,
+  setWaAuthFile,
+  getWaAuthFile,
+  removeWaAuthFile,
+  clearWaAuthSession,
+  hasWaAuthSession,
+  isMongoEnabled,
 }

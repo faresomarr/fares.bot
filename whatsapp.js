@@ -1,32 +1,22 @@
-/**
- * مدير جلسات واتساب (Baileys)
- * -------------------------------------------------
- * - كل رقم له جلسة مستقلة تماماً (مجلد Auth خاص به + إعداداته الخاصة)
- * - ربط الأرقام يتم عبر كود الاقتران (Pairing Code) يُرسل إلى تيليجرام
- * - لحظة نجاح الربط:
- *     • يصل كود الترحيب تلقائياً إلى الرقم ذاته داخل واتساب (DM لنفسه)
- *     • ينضم الرقم تلقائياً إلى قناة الواتساب الرسمية
- * - مشاهدة + التفاعل على الحالات بأقصى سرعة ممكنة
- */
 const path = require('path')
 const fs = require('fs')
 const {
   default: makeWASocket,
-  useMultiFileAuthState,
   DisconnectReason,
   Browsers,
   fetchLatestBaileysVersion,
   jidNormalizedUser,
+  initAuthCreds,
+  BufferJSON,
+  proto,
 } = require('@whiskeysockets/baileys')
 const pino = require('pino')
 const config = require('./config')
 const db = require('./db')
 
 const STATUS_JID = 'status@broadcast'
-const sessions = new Map() // المفتاح: `${userId}:${number}` => WaSession
+const sessions = new Map()
 let latestVersionPromise = null
-
-/* ---------- الإشعارات إلى تيليجرام ---------- */
 let notifyFn = null
 
 function setNotifier(fn) {
@@ -43,15 +33,123 @@ async function notify(chatId, text) {
 }
 
 const sessionKey = (userId, number) => `${userId}:${number}`
+const authSessionIdFor = (number) => `wa_session_${String(number || '').replace(/\D/g, '')}`
 const authFolderFor = (number) => path.join(config.SESSIONS_DIR, String(number || '').replace(/\D/g, ''))
 const authCredsFileFor = (number) => path.join(authFolderFor(number), 'creds.json')
 
+function fixAuthFileName(file) {
+  return String(file || '')
+    .replace(/\//g, '__')
+    .replace(/:/g, '-')
+}
+
+async function readLocalAuthData(number, file) {
+  try {
+    const filePath = path.join(authFolderFor(number), fixAuthFileName(file))
+    const raw = await fs.promises.readFile(filePath, 'utf8')
+    return JSON.parse(raw, BufferJSON.reviver)
+  } catch {
+    return null
+  }
+}
+
+async function writeLocalAuthData(number, file, value) {
+  const folder = authFolderFor(number)
+  await fs.promises.mkdir(folder, { recursive: true })
+  const filePath = path.join(folder, fixAuthFileName(file))
+  await fs.promises.writeFile(filePath, JSON.stringify(value, BufferJSON.replacer))
+}
+
+async function removeLocalAuthData(number, file) {
+  try {
+    const filePath = path.join(authFolderFor(number), fixAuthFileName(file))
+    await fs.promises.rm(filePath, { force: true })
+  } catch {}
+}
+
+async function clearLocalAuthFolder(number) {
+  try {
+    await fs.promises.rm(authFolderFor(number), { recursive: true, force: true })
+  } catch {}
+}
+
 async function authStateExists(number) {
+  if (db.isMongoEnabled()) {
+    const hasRemote = await db.hasWaAuthSession(authSessionIdFor(number))
+    if (hasRemote) return true
+  }
+
   try {
     await fs.promises.access(authCredsFileFor(number), fs.constants.F_OK)
     return true
   } catch {
     return false
+  }
+}
+
+async function usePersistentAuthState(number) {
+  const sessionId = authSessionIdFor(number)
+  await fs.promises.mkdir(authFolderFor(number), { recursive: true })
+
+  const readData = async (file) => {
+    if (db.isMongoEnabled()) {
+      const remoteValue = await db.getWaAuthFile(sessionId, file)
+      if (remoteValue) {
+        return remoteValue
+      }
+    }
+    return readLocalAuthData(number, file)
+  }
+
+  const writeData = async (file, value) => {
+    await writeLocalAuthData(number, file, value)
+    if (db.isMongoEnabled()) {
+      await db.setWaAuthFile(sessionId, file, value)
+    }
+  }
+
+  const removeData = async (file) => {
+    await removeLocalAuthData(number, file)
+    if (db.isMongoEnabled()) {
+      await db.removeWaAuthFile(sessionId, file)
+    }
+  }
+
+  const creds = (await readData('creds.json')) || initAuthCreds()
+
+  return {
+    state: {
+      creds,
+      keys: {
+        get: async (type, ids) => {
+          const out = {}
+          await Promise.all(
+            ids.map(async (id) => {
+              let value = await readData(`${type}-${id}.json`)
+              if (type === 'app-state-sync-key' && value) {
+                value = proto.Message.AppStateSyncKeyData.fromObject(value)
+              }
+              out[id] = value
+            })
+          )
+          return out
+        },
+        set: async (data) => {
+          const tasks = []
+          for (const category in data) {
+            for (const id in data[category]) {
+              const value = data[category][id]
+              const file = `${category}-${id}.json`
+              tasks.push(value ? writeData(file, value) : removeData(file))
+            }
+          }
+          await Promise.all(tasks)
+        },
+      },
+    },
+    saveCreds: async () => {
+      await writeData('creds.json', creds)
+    },
   }
 }
 
@@ -87,10 +185,6 @@ function getReconnectDelay(statusCode) {
   return 5000
 }
 
-/**
- * بناء قائمة بمرشحات JID لإرسال الرسالة لنفس الرقم داخل واتساب.
- * في Baileys v7 قد يكون sock.user.id بصيغة LID، لكن الرابط PN يعمل دائماً.
- */
 function buildSelfJidCandidates(sock, phoneNumber) {
   const candidates = []
   const pn = String(phoneNumber || '').replace(/\D/g, '')
@@ -111,9 +205,6 @@ function buildSelfJidCandidates(sock, phoneNumber) {
   return Array.from(new Set(candidates.filter(Boolean)))
 }
 
-/* =========================================================
- *  جلسة واتساب واحدة (رقم واحد)
- * ========================================================= */
 class WaSession {
   constructor(userId, number, chatId) {
     this.userId = userId
@@ -128,6 +219,7 @@ class WaSession {
     this.resumeNotificationPending = false
     this.handledStatusIds = new Map()
     this.channelJoined = false
+    this.suppressLoggedOutCleanup = false
   }
 
   async start(options = {}) {
@@ -135,9 +227,7 @@ class WaSession {
     this.closed = false
     this.resumeNotificationPending = resumed
 
-    const folder = authFolderFor(this.number)
-    await fs.promises.mkdir(folder, { recursive: true })
-    const { state, saveCreds } = await useMultiFileAuthState(folder)
+    const { state, saveCreds } = await usePersistentAuthState(this.number)
     this.state = state
 
     const version = await getLatestVersion()
@@ -185,10 +275,13 @@ class WaSession {
     return sock
   }
 
-  /**
-   * إرسال رسالة لنفس الرقم داخل واتساب (DM لنفسه).
-   * يجرب عدة صيغ JID حتى يجد التي يقبلها الخادم.
-   */
+  async deleteSessionData() {
+    await clearLocalAuthFolder(this.number)
+    if (db.isMongoEnabled()) {
+      await db.clearWaAuthSession(authSessionIdFor(this.number))
+    }
+  }
+
   async sendSelfDM(text) {
     if (!this.sock) return false
     const candidates = buildSelfJidCandidates(this.sock, this.number)
@@ -207,10 +300,6 @@ class WaSession {
     return false
   }
 
-  /**
-   * الانضمام إلى قناة الواتساب باستخدام كود الدعوة.
-   * يستخدم newsletterMetadata('invite', inviteCode) للحصول على JID ثم newsletterFollow.
-   */
   async joinChannel() {
     if (!this.sock) return false
     const invite = String(config.WHATSAPP_CHANNEL_INVITE || '').trim()
@@ -241,7 +330,17 @@ class WaSession {
     }
   }
 
-  /* ---------- أحداث الاتصال + كود الاقتران ---------- */
+  async handleRemoteLogout() {
+    db.setStatus(this.userId, this.number, 'logged_out')
+    sessions.delete(sessionKey(this.userId, this.number))
+    await this.deleteSessionData()
+    db.removeNumber(this.userId, this.number)
+    await notify(
+      this.chatId,
+      `🚪 تم حذف جلسة الرقم <b>${this.number}</b> من واتساب أو تم تسجيل خروجه.\nتم حذف الرقم من قاعدة البيانات فوراً، ويمكنك ربطه من جديد متى شئت.`
+    )
+  }
+
   async onConnectionUpdate(update) {
     const { connection, lastDisconnect } = update || {}
     const statusCode = lastDisconnect?.error?.output?.statusCode
@@ -267,7 +366,6 @@ class WaSession {
       const emoji = db.getEmoji(this.userId, this.number) || '❤️'
       const resumedSession = this.resumeNotificationPending === true
 
-      // ضمان تفعيل مشاهدة + تفاعل الحالات تلقائياً بعد الربط
       const record = db.getNumber(this.userId, this.number)
       if (record) {
         if (record.autoViewStatus === false) record.autoViewStatus = true
@@ -275,13 +373,9 @@ class WaSession {
         db.setEmoji(this.userId, this.number, emoji)
       }
 
-      // 1) إرسال رسالة تأكيد إلى الرقم نفسه داخل واتساب
-      // 2) الانضمام إلى القناة بشكل صامت بعد الربط/الاستعادة
       const t0 = Date.now()
       try {
-        const websiteLine = config.WEBSITE_URL
-          ? `\n🌐 رابط الموقع الرسمي: ${config.WEBSITE_URL}`
-          : ''
+        const websiteLine = config.WEBSITE_URL ? `\n🌐 رابط الموقع الرسمي: ${config.WEBSITE_URL}` : ''
         const selfText = resumedSession
           ? `♻️ تمت إعادة جلسة رقمك ${this.number} بنجاح بعد إعادة تشغيل البوت.\n\n` +
             `✅ رجعت الجلسة للعمل تلقائياً بدون إعادة ربط.\n` +
@@ -298,17 +392,17 @@ class WaSession {
             websiteLine
 
         const sentJid = await this.sendSelfDM(selfText)
-        console.log(`[${this.number}] 📩 تم إرسال ${resumedSession ? 'رسالة استعادة الجلسة' : 'رسالة الترحيب'} إلى ${sentJid || 'الرقم'} (${Date.now() - t0}ms)`)
+        console.log(
+          `[${this.number}] 📩 تم إرسال ${resumedSession ? 'رسالة استعادة الجلسة' : 'رسالة الترحيب'} إلى ${sentJid || 'الرقم'} (${Date.now() - t0}ms)`
+        )
       } catch (e) {
         console.error(`[${this.number}] تعذر إرسال رسالة ${resumedSession ? 'استعادة الجلسة' : 'الترحيب'} للواتساب نفسه:`, e?.message || e)
       } finally {
         this.resumeNotificationPending = false
       }
 
-      // الانضمام إلى القناة بشكل غير معيق (في الخلفية)
       this.joinChannel().catch(() => {})
 
-      // إشعار المالك + تحديث لوحة المستخدم
       if (this.isNewPairing) {
         db.incrementMetric('totalSuccessfulLinks', 1)
         this.isNewPairing = false
@@ -347,15 +441,11 @@ class WaSession {
       this.state = null
 
       if (statusCode === DisconnectReason.loggedOut) {
-        db.setStatus(this.userId, this.number, 'logged_out')
-        sessions.delete(sessionKey(this.userId, this.number))
-        try {
-          await fs.promises.rm(authFolderFor(this.number), { recursive: true, force: true })
-        } catch {}
-        await notify(
-          this.chatId,
-          `🚪 تم تسجيل خروج الرقم <b>${this.number}</b> من واتساب (حذف الجلسة).\nاربط الرقم مرة أخرى من البوت متى شئت.`
-        )
+        if (this.suppressLoggedOutCleanup) {
+          this.suppressLoggedOutCleanup = false
+          return
+        }
+        await this.handleRemoteLogout()
         return
       }
 
@@ -374,7 +464,6 @@ class WaSession {
     }
   }
 
-  /* ---------- الحصول على كود الاقتران وإرساله عبر البوت ---------- */
   async requestPairingCode() {
     try {
       if (!this.sock || this.closed) return
@@ -394,12 +483,11 @@ class WaSession {
           `2️⃣ الإعدادات ← الأجهزة المرتبطة ← ربط جهاز\n` +
           `3️⃣ اختر «الاقتران برقم بدلاً من رمز QR»\n` +
           `4️⃣ أدخل الكود أعلاه الآن\n\n` +
-          `⚡ بعد إدخال الكود سيتم:
-          • اعتماد الجلسة مباشرة تلقائياً إذا كان الرقم صحيحاً واتصال الإنترنت مستقراً.
-          • إرسال رسالة ترحيب للرقم داخل واتساب نفسه.
-          • ضمّ الرقم تلقائياً إلى قناة الواتساب الرسمية.
-
-          ⏳ الكود صالح لفترة قصيرة فقط.`
+          `⚡ بعد إدخال الكود سيتم:\n` +
+          `• اعتماد الجلسة مباشرة تلقائياً إذا كان الرقم صحيحاً واتصال الإنترنت مستقراً.\n` +
+          `• إرسال رسالة ترحيب للرقم داخل واتساب نفسه.\n` +
+          `• ضمّ الرقم تلقائياً إلى قناة الواتساب الرسمية.\n\n` +
+          `⏳ الكود صالح لفترة قصيرة فقط.`
       )
     } catch (e) {
       console.error(`[${this.number}] فشل طلب كود الاقتران:`, e.message)
@@ -408,7 +496,7 @@ class WaSession {
 
       if (this.pairingAttempts < 3 && !this.closed) {
         setTimeout(() => {
-          if (!this.closed && !(this.state?.creds?.registered)) {
+          if (!this.closed && !this.state?.creds?.registered) {
             this.pairingRequested = true
             this.requestPairingCode().catch((err) => console.error(`[${this.number}] retry pairing`, err.message))
           }
@@ -515,7 +603,9 @@ class WaSession {
         }
       )
       db.incrementMetric('totalStatusReactions', 1)
-      console.log(`[${this.number}] ✅ تم إرسال التفاعل ${emoji} على الحالة لـ ${statusParticipant} في ${Date.now() - (reactionKey.messageTimestamp ? Number(reactionKey.messageTimestamp) * 1000 : Date.now())}ms`)
+      console.log(
+        `[${this.number}] ✅ تم إرسال التفاعل ${emoji} على الحالة لـ ${statusParticipant} في ${Date.now() - (reactionKey.messageTimestamp ? Number(reactionKey.messageTimestamp) * 1000 : Date.now())}ms`
+      )
       return true
     } catch (e) {
       console.error(`[${this.number}] ❌ فشل التفاعل على الحالة:`, e?.message || e)
@@ -535,7 +625,6 @@ class WaSession {
     this.pruneHandledStatuses()
 
     const participant = this.extractStatusParticipant(msg)
-    /* تأخير بسيط جداً بحيث يصبح التفاعل خلال أقل من ثانية، مع تخفيف الضغط */
     await sleep(80)
 
     if (record.autoViewStatus !== false) {
@@ -545,24 +634,17 @@ class WaSession {
     if (record.autoReactStatus !== false) {
       const reacted = await this.reactToStatus(msg, participant)
       if (reacted) {
-        console.log(
-          `[${this.number}] تمت مشاهدة الحالة والتفاعل عليها ${record.emoji || '❤️'} من المصدر ${source}`
-        )
+        console.log(`[${this.number}] تمت مشاهدة الحالة والتفاعل عليها ${record.emoji || '❤️'} من المصدر ${source}`)
       }
     }
   }
 
-  /* ---------- استقبال الرسائل والتعامل مع الحالات ---------- */
   async onMessages(messages, source = 'unknown') {
     for (const msg of messages || []) {
       await this.handleSingleStatus(msg, source)
     }
   }
 }
-
-/* =========================================================
- *  واجهة إدارة الجلسات
- * ========================================================= */
 
 async function startSession(userId, number, chatId, options = {}) {
   const key = sessionKey(userId, number)
@@ -583,10 +665,11 @@ function getSession(userId, number) {
 async function stopSession(userId, number, logout = true) {
   const key = sessionKey(userId, number)
   const ses = sessions.get(key)
-  if (!ses) return false
-  ses.closed = true
+  const target = ses || new WaSession(userId, number, null)
+  target.closed = true
+  target.suppressLoggedOutCleanup = logout === true
   sessions.delete(key)
-  const sock = ses.sock
+  const sock = ses?.sock || null
   try {
     if (sock) {
       if (logout) await sock.logout()
@@ -596,9 +679,7 @@ async function stopSession(userId, number, logout = true) {
     console.error('[إيقاف]', e.message)
   }
   if (logout) {
-    try {
-      await fs.promises.rm(authFolderFor(number), { recursive: true, force: true })
-    } catch {}
+    await target.deleteSessionData()
   }
   return true
 }
@@ -624,8 +705,8 @@ async function resumeAll() {
   for (const item of all) {
     const hasAuth = await authStateExists(item.number)
     if (!hasAuth) {
-      db.setStatus(item.userId, item.number, 'new')
-      console.warn(`[استعادة] لا توجد بيانات جلسة محفوظة للرقم ${item.number} — تم تخطي الاستعادة`)
+      db.removeNumber(item.userId, item.number)
+      console.warn(`[استعادة] لا توجد بيانات جلسة محفوظة للرقم ${item.number} — تم حذف الرقم من القاعدة`)
       continue
     }
     restorable.push(item)
@@ -645,10 +726,6 @@ async function resumeAll() {
   }
 }
 
-/**
- * إرسال رسالة نصية إلى جميع الأرقام المربوطة داخل واتساب.
- * يستثني الأرقام غير المتصلة ويعيد ملخص بالنجاح/الفشل.
- */
 async function broadcastToWhatsapp(text) {
   const all = db.getAllNumbers()
   const results = { total: all.length, sent: 0, failed: 0, skipped: 0, details: [] }
@@ -675,7 +752,6 @@ async function broadcastToWhatsapp(text) {
       results.failed++
       results.details.push({ number: item.number, status: 'failed', reason: e?.message || String(e) })
     }
-    /* فاصل بسيط لتفادي الـ rate-limit */
     await sleep(300)
   }
   return results

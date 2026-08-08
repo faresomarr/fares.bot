@@ -21,6 +21,10 @@ module.exports = {
     .filter(Boolean)
     .map(Number),
   ONLY_ADMINS: (process.env.ONLY_ADMINS || 'false').toString().toLowerCase() === 'true',
+
+  MONGODB_URI: String(process.env.MONGODB_URI || '').trim(),
+  MONGODB_DB_NAME: String(process.env.MONGODB_DB_NAME || 'fares_bot').trim() || 'fares_bot',
+
   DB_FILE: process.env.DB_FILE || './data/db.json',
   SESSIONS_DIR: process.env.SESSIONS_DIR || './sessions',
 
