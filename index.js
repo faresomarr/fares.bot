@@ -155,6 +155,32 @@ async function refreshAllDashboards() {
   }
 }
 
+async function clearPending(chatId) {
+  pending.delete(chatId)
+}
+
+async function handleStartCommand(msg) {
+  const chatId = msg.chat.id
+  const userId = msg.from.id
+  if (!isAuthorized(userId)) {
+    return bot.sendMessage(chatId, '⛔ أنت غير مصرح لك باستخدام هذا البوت.').catch(() => {})
+  }
+
+  clearPending(chatId)
+  db.ensureUser(userId, chatId)
+
+  const previousDashboardMessageId = db.getDashboardMessage(userId)
+  if (previousDashboardMessageId) {
+    await bot.deleteMessage(chatId, String(previousDashboardMessageId)).catch(() => {})
+    db.clearDashboardMessage(userId)
+  }
+
+  return showDashboard(chatId, userId, { forceNew: true }).catch((e) => {
+    console.error('[/start]', e.message)
+    return bot.sendMessage(chatId, '❌ حدث خطأ أثناء فتح الواجهة الرئيسية.').catch(() => {})
+  })
+}
+
 async function linkNumber(chatId, userId, rawNumber) {
   const number = String(rawNumber || '').replace(/\D/g, '')
   if (!/^\d{8,15}$/.test(number)) {
@@ -209,19 +235,6 @@ function registerTelegramHandlers() {
       console.error('[إشعار]', e.message)
     }
     await refreshDashboardByChat(chatId)
-  })
-
-  bot.onText(/^\/start(?:@\w+)?(?:\s|$)/, async (msg) => {
-    const chatId = msg.chat.id
-    const userId = msg.from.id
-    if (!isAuthorized(userId)) {
-      return bot.sendMessage(chatId, '⛔ أنت غير مصرح لك باستخدام هذا البوت.').catch(() => {})
-    }
-    db.ensureUser(userId, chatId)
-    await showDashboard(chatId, userId).catch((e) => {
-      console.error('[/start]', e.message)
-      return bot.sendMessage(chatId, '❌ حدث خطأ أثناء فتح الواجهة الرئيسية.').catch(() => {})
-    })
   })
 
   bot.onText(/^\/admin(?:@\w+)?(?:\s|$)/, async (msg) => {
@@ -491,6 +504,10 @@ function registerTelegramHandlers() {
     if (msg.text.startsWith('/')) {
       const parts = msg.text.trim().split(/\s+/)
       const command = (parts[0] || '').split('@')[0]
+
+      if (command === '/start') {
+        return handleStartCommand(msg)
+      }
 
       if (command === '/add') {
         const num = (parts[1] || '').replace(/\D/g, '')
