@@ -19,6 +19,26 @@ const sessions = new Map()
 let latestVersionPromise = null
 let notifyFn = null
 
+const LOG_LEVELS = { silent: 0, error: 1, warn: 2, info: 3, debug: 4 }
+
+function canLog(level) {
+  const current = LOG_LEVELS[config.LOG_LEVEL] ?? LOG_LEVELS.warn
+  const wanted = LOG_LEVELS[level] ?? LOG_LEVELS.info
+  return current >= wanted
+}
+
+function logInfo(...args) {
+  if (canLog('info')) console.log(...args)
+}
+
+function logWarn(...args) {
+  if (canLog('warn')) console.warn(...args)
+}
+
+function logError(...args) {
+  if (canLog('error')) console.error(...args)
+}
+
 function setNotifier(fn) {
   notifyFn = fn
 }
@@ -28,20 +48,22 @@ async function notify(chatId, text) {
   try {
     await notifyFn(chatId, text)
   } catch (e) {
-    console.error('[إشعار]', e.message)
+    logError('[إشعار]', e.message)
   }
 }
 
 const normalizePhone = (number) => String(number || '').replace(/\D/g, '')
 const sessionKey = (userId, number) => `${Number(userId)}:${normalizePhone(number)}`
-// A session is owned by both the Telegram user and the WhatsApp number.
-// Never use a process-wide socket or a number-only auth directory.
 const sessionIdentity = (userId, number) => `${Number(userId)}_${normalizePhone(number)}`
 const authSessionIdFor = (userId, number) => `wa_session_${sessionIdentity(userId, number)}`
 const legacyAuthSessionIdFor = (number) => `wa_session_${normalizePhone(number)}`
 const authFolderFor = (userId, number) => path.join(config.SESSIONS_DIR, sessionIdentity(userId, number))
 const legacyAuthFolderFor = (number) => path.join(config.SESSIONS_DIR, normalizePhone(number))
 const authCredsFileFor = (userId, number) => path.join(authFolderFor(userId, number), 'creds.json')
+
+function useDatabaseOnlySessionStorage() {
+  return config.SESSION_STORAGE_MODE === 'database' && db.isRemoteSessionStorageEnabled()
+}
 
 function fixAuthFileName(file) {
   return String(file || '')
@@ -80,13 +102,12 @@ async function removeLocalAuthData(userId, number, file) {
 async function clearLocalAuthFolder(userId, number) {
   try {
     await fs.promises.rm(authFolderFor(userId, number), { recursive: true, force: true })
-    // Remove the pre-isolation directory too, if it is no longer used.
     await fs.promises.rm(legacyAuthFolderFor(number), { recursive: true, force: true })
   } catch {}
 }
 
 async function authStateExists(userId, number) {
-  if (db.isMongoEnabled()) {
+  if (db.isRemoteSessionStorageEnabled()) {
     const hasRemote = await db.hasWaAuthSession(authSessionIdFor(userId, number))
     const hasLegacyRemote = await db.hasWaAuthSession(legacyAuthSessionIdFor(number))
     if (hasRemote || hasLegacyRemote) return true
@@ -106,29 +127,40 @@ async function authStateExists(userId, number) {
 
 async function usePersistentAuthState(userId, number) {
   const sessionId = authSessionIdFor(userId, number)
-  await fs.promises.mkdir(authFolderFor(userId, number), { recursive: true })
+  const legacySessionId = legacyAuthSessionIdFor(number)
+  const scope = typeof db.getSessionScope === 'function'
+    ? db.getSessionScope(userId, number)
+    : `sessions/${Number(userId)}/${normalizePhone(number)}`
+  const dbOnly = useDatabaseOnlySessionStorage()
+
+  if (!dbOnly) {
+    await fs.promises.mkdir(authFolderFor(userId, number), { recursive: true })
+  }
 
   const readData = async (file) => {
-    if (db.isMongoEnabled()) {
+    if (db.isRemoteSessionStorageEnabled()) {
       const remoteValue = await db.getWaAuthFile(sessionId, file)
       if (remoteValue) return remoteValue
-      // One-time compatibility fallback for auth created before per-user isolation.
-      const legacyRemoteValue = await db.getWaAuthFile(legacyAuthSessionIdFor(number), file)
+      const legacyRemoteValue = await db.getWaAuthFile(legacySessionId, file)
       if (legacyRemoteValue) return legacyRemoteValue
     }
     return readLocalAuthData(userId, number, file)
   }
 
   const writeData = async (file, value) => {
-    await writeLocalAuthData(userId, number, file, value)
-    if (db.isMongoEnabled()) {
+    if (!dbOnly) {
+      await writeLocalAuthData(userId, number, file, value)
+    }
+    if (db.isRemoteSessionStorageEnabled()) {
       await db.setWaAuthFile(sessionId, file, value)
     }
   }
 
   const removeData = async (file) => {
-    await removeLocalAuthData(userId, number, file)
-    if (db.isMongoEnabled()) {
+    if (!dbOnly) {
+      await removeLocalAuthData(userId, number, file)
+    }
+    if (db.isRemoteSessionStorageEnabled()) {
       await db.removeWaAuthFile(sessionId, file)
     }
   }
@@ -153,20 +185,36 @@ async function usePersistentAuthState(userId, number) {
           return out
         },
         set: async (data) => {
-          const tasks = []
+          const localTasks = []
+          const remoteMutations = []
+
           for (const category in data) {
             for (const id in data[category]) {
               const value = data[category][id]
               const file = `${category}-${id}.json`
-              tasks.push(value ? writeData(file, value) : removeData(file))
+              if (!dbOnly) {
+                localTasks.push(value ? writeLocalAuthData(userId, number, file, value) : removeLocalAuthData(userId, number, file))
+              }
+              if (db.isRemoteSessionStorageEnabled()) {
+                remoteMutations.push({ fileName: file, value: value ?? null, scope })
+              }
             }
           }
-          await Promise.all(tasks)
+
+          if (localTasks.length) {
+            await Promise.all(localTasks)
+          }
+          if (remoteMutations.length) {
+            await db.applyWaAuthMutations(sessionId, remoteMutations)
+          }
         },
       },
     },
     saveCreds: async () => {
       await writeData('creds.json', creds)
+    },
+    removeCreds: async () => {
+      await removeData('creds.json')
     },
   }
 }
@@ -180,7 +228,7 @@ async function getLatestVersion() {
     latestVersionPromise = fetchLatestBaileysVersion()
       .then((result) => result?.version)
       .catch((e) => {
-        console.error('[Baileys version]', e.message)
+        logWarn('[Baileys version]', e.message)
         return undefined
       })
   }
@@ -197,10 +245,10 @@ function getBrowserProfile() {
 
 function getReconnectDelay(statusCode) {
   if (statusCode === DisconnectReason.restartRequired) return 1000
-  if (statusCode === DisconnectReason.connectionClosed) return 2000
-  if (statusCode === DisconnectReason.connectionLost) return 3000
-  if (statusCode === DisconnectReason.timedOut) return 3500
-  return 5000
+  if (statusCode === DisconnectReason.connectionClosed) return 1500
+  if (statusCode === DisconnectReason.connectionLost) return 2000
+  if (statusCode === DisconnectReason.timedOut) return 2500
+  return 4000
 }
 
 function buildSelfJidCandidates(sock, phoneNumber) {
@@ -221,6 +269,32 @@ function buildSelfJidCandidates(sock, phoneNumber) {
     }
   } catch {}
   return Array.from(new Set(candidates.filter(Boolean)))
+}
+
+function toNumber(value) {
+  if (typeof value === 'number') return value
+  if (typeof value === 'bigint') return Number(value)
+  if (value && typeof value.toNumber === 'function') return value.toNumber()
+  if (value && typeof value.low === 'number') return value.low
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function getMessageTimestampMs(msg) {
+  const raw = msg?.messageTimestamp
+  const ts = toNumber(raw)
+  if (!ts) return 0
+  return ts > 1e12 ? ts : ts * 1000
+}
+
+async function runInBatches(items, limit, delayMs, worker) {
+  for (let i = 0; i < items.length; i += limit) {
+    const slice = items.slice(i, i + limit)
+    await Promise.allSettled(slice.map((item) => worker(item)))
+    if (delayMs > 0 && i + limit < items.length) {
+      await sleep(delayMs)
+    }
+  }
 }
 
 class WaSession {
@@ -248,8 +322,11 @@ class WaSession {
     if (this.closed) return null
     if (this.startPromise) return this.startPromise
     this.startPromise = this._start(options)
-    try { return await this.startPromise }
-    finally { this.startPromise = null }
+    try {
+      return await this.startPromise
+    } finally {
+      this.startPromise = null
+    }
   }
 
   async _start(options = {}) {
@@ -273,7 +350,7 @@ class WaSession {
       fireInitQueries: true,
       keepAliveIntervalMs: 30000,
       defaultQueryTimeoutMs: undefined,
-      connectTimeoutMs: 60000,
+      connectTimeoutMs: 45000,
       getMessage: async () => undefined,
     })
     this.sock = sock
@@ -283,32 +360,34 @@ class WaSession {
       try {
         await saveCreds()
       } catch (e) {
-        console.error(`[${this.number}] saveCreds`, e.message)
+        logError(`[${this.number}] saveCreds`, e.message)
       }
     })
 
     sock.ev.on('connection.update', (u) => {
-      this.onConnectionUpdate(u, sock, generation).catch((e) => console.error(`[${this.number}] connection.update`, e.message))
+      this.onConnectionUpdate(u, sock, generation).catch((e) => logError(`[${this.number}] connection.update`, e.message))
     })
 
     sock.ev.on('messages.upsert', ({ messages, type }) => {
       this.onMessages(messages, `upsert:${type || 'notify'}`).catch((e) =>
-        console.error(`[${this.number}] messages.upsert`, e.message)
+        logError(`[${this.number}] messages.upsert`, e.message)
       )
     })
 
-    sock.ev.on('messaging-history.set', ({ messages, syncType }) => {
-      this.onMessages(messages, `history:${syncType || 'unknown'}`).catch((e) =>
-        console.error(`[${this.number}] messaging-history.set`, e.message)
-      )
-    })
+    if (config.PROCESS_HISTORY_STATUSES) {
+      sock.ev.on('messaging-history.set', ({ messages, syncType }) => {
+        this.onMessages(messages, `history:${syncType || 'unknown'}`).catch((e) =>
+          logError(`[${this.number}] messaging-history.set`, e.message)
+        )
+      })
+    }
 
     return sock
   }
 
   async deleteSessionData() {
     await clearLocalAuthFolder(this.userId, this.number)
-    if (db.isMongoEnabled()) {
+    if (db.isRemoteSessionStorageEnabled()) {
       await db.clearWaAuthSession(authSessionIdFor(this.userId, this.number))
       await db.clearWaAuthSession(legacyAuthSessionIdFor(this.number))
     }
@@ -325,7 +404,6 @@ class WaSession {
         return jid
       } catch (e) {
         lastError = e
-        console.error(`[${this.number}] فشل إرسال DM إلى ${jid}:`, e?.message || e)
       }
     }
     if (lastError) throw lastError
@@ -343,9 +421,7 @@ class WaSession {
         try {
           const md = await this.sock.newsletterMetadata('invite', invite)
           newsletterJid = md?.id || null
-        } catch (e) {
-          console.error(`[${this.number}] newsletterMetadata(invite) فشل:`, e?.message || e)
-        }
+        } catch {}
       }
       if (!newsletterJid) newsletterJid = `${invite}@newsletter`
       if (typeof this.sock.newsletterFollow === 'function') {
@@ -354,10 +430,9 @@ class WaSession {
       db.setJoinedChannel(this.userId, this.number, true)
       this.channelJoined = true
       db.incrementMetric('totalChannelJoinSuccess', 1)
-      console.log(`[${this.number}] ✅ انضم إلى القناة ${newsletterJid}`)
       return newsletterJid
     } catch (e) {
-      console.error(`[${this.number}] ❌ فشل الانضمام للقناة:`, e?.message || e)
+      logWarn(`[${this.number}] فشل الانضمام للقناة:`, e?.message || e)
       return false
     }
   }
@@ -386,8 +461,8 @@ class WaSession {
       if (!registered && !this.pairingRequested) {
         this.pairingRequested = true
         setTimeout(() => {
-          this.requestPairingCode().catch((e) => console.error(`[${this.number}] pairing`, e.message))
-        }, 1500)
+          this.requestPairingCode().catch((e) => logError(`[${this.number}] pairing`, e.message))
+        }, 1200)
       }
       return
     }
@@ -406,7 +481,6 @@ class WaSession {
         db.setEmoji(this.userId, this.number, emoji)
       }
 
-      const t0 = Date.now()
       try {
         const websiteLine = config.WEBSITE_URL ? `\n🌐 رابط الموقع الرسمي: ${config.WEBSITE_URL}` : ''
         const selfText = resumedSession
@@ -419,17 +493,14 @@ class WaSession {
           : `✅ تم ربط رقمك ${this.number} بنجاح!\n\n` +
             `👁 تم تفعيل مشاهدة الحالات تلقائياً\n` +
             `😀 تم تفعيل التفاعل التلقائي على الحالات بالإيموجي ${emoji} لهذا الرقم.\n\n` +
-            `كل حالة جديدة ستصلك عليها علامة قراءة + قلب ${emoji} تلقائياً خلال ثانية واحدة.\n\n` +
+            `كل حالة جديدة ستتم قراءتها والتفاعل معها فوراً خلال أقل من ثانية غالباً.\n\n` +
             `📢 تم ضمّ الرقم تلقائياً إلى قناة الواتساب الرسمية.\n` +
             `💬 لأي استفسار كلّم المطور من داخل البوت عبر زر «مراسلة المطور».` +
             websiteLine
 
-        const sentJid = await this.sendSelfDM(selfText)
-        console.log(
-          `[${this.number}] 📩 تم إرسال ${resumedSession ? 'رسالة استعادة الجلسة' : 'رسالة الترحيب'} إلى ${sentJid || 'الرقم'} (${Date.now() - t0}ms)`
-        )
+        await this.sendSelfDM(selfText)
       } catch (e) {
-        console.error(`[${this.number}] تعذر إرسال رسالة ${resumedSession ? 'استعادة الجلسة' : 'الترحيب'} للواتساب نفسه:`, e?.message || e)
+        logWarn(`[${this.number}] تعذر إرسال رسالة ${resumedSession ? 'استعادة الجلسة' : 'الترحيب'} للواتساب نفسه:`, e?.message || e)
       } finally {
         this.resumeNotificationPending = false
       }
@@ -465,7 +536,7 @@ class WaSession {
         )
       }
 
-      console.log(`[${this.number}] 🟢 الجلسة جاهزة — مشاهدة + تفاعل الحالات مفعّلان تلقائياً`)
+      logInfo(`[${this.number}] الجلسة متصلة وتعمل`) 
       return
     }
 
@@ -495,7 +566,7 @@ class WaSession {
       this.reconnectTimer = setTimeout(() => {
         this.reconnectTimer = null
         if (!this.closed && this.socketGeneration === reconnectGeneration) {
-          this.start().catch((e) => console.error(`[${this.number}] reconnect`, e.message))
+          this.start().catch((e) => logError(`[${this.number}] reconnect`, e.message))
         }
       }, delay)
     }
@@ -527,7 +598,7 @@ class WaSession {
           `⏳ الكود صالح لفترة قصيرة فقط.`
       )
     } catch (e) {
-      console.error(`[${this.number}] فشل طلب كود الاقتران:`, e.message)
+      logWarn(`[${this.number}] فشل طلب كود الاقتران:`, e.message)
       this.pairingAttempts++
       this.pairingRequested = false
 
@@ -535,7 +606,7 @@ class WaSession {
         setTimeout(() => {
           if (!this.closed && !this.state?.creds?.registered) {
             this.pairingRequested = true
-            this.requestPairingCode().catch((err) => console.error(`[${this.number}] retry pairing`, err.message))
+            this.requestPairingCode().catch((err) => logError(`[${this.number}] retry pairing`, err.message))
           }
         }, 8000)
         return
@@ -555,6 +626,16 @@ class WaSession {
 
   isStatusMessage(msg) {
     return !!msg && !msg.key?.fromMe && msg.key?.remoteJid === STATUS_JID
+  }
+
+  isFreshStatus(msg, source) {
+    const isHistory = String(source || '').startsWith('history:')
+    if (isHistory && !config.PROCESS_HISTORY_STATUSES) return false
+    const ts = getMessageTimestampMs(msg)
+    if (!ts) return true
+    const age = Date.now() - ts
+    const maxAge = isHistory ? config.HISTORY_STATUS_MAX_AGE_MS : config.MAX_STATUS_AGE_MS
+    return age <= maxAge
   }
 
   extractStatusParticipant(msg) {
@@ -584,9 +665,9 @@ class WaSession {
   }
 
   pruneHandledStatuses() {
-    const maxEntries = 1500
+    const maxEntries = 6000
     if (this.handledStatusIds.size <= maxEntries) return
-    const excess = this.handledStatusIds.size - 1000
+    const excess = this.handledStatusIds.size - 4500
     const keys = Array.from(this.handledStatusIds.keys()).slice(0, excess)
     for (const key of keys) this.handledStatusIds.delete(key)
   }
@@ -603,7 +684,7 @@ class WaSession {
       db.incrementMetric('totalStatusViews', 1)
       return true
     } catch (e) {
-      console.error(`[${this.number}] فشل تعليم الحالة كمشاهدة:`, e.message)
+      logWarn(`[${this.number}] فشل تعليم الحالة كمشاهدة:`, e.message)
       return false
     }
   }
@@ -615,7 +696,6 @@ class WaSession {
     const statusParticipant = participant || this.extractStatusParticipant(msg)
 
     if (!statusParticipant || statusParticipant === STATUS_JID) {
-      console.error(`[${this.number}] تعذر تحديد صاحب الحالة (participant) — تخطي التفاعل`)
       return false
     }
 
@@ -640,21 +720,28 @@ class WaSession {
         }
       )
       db.incrementMetric('totalStatusReactions', 1)
-      console.log(
-        `[${this.number}] ✅ تم إرسال التفاعل ${emoji} على الحالة لـ ${statusParticipant} في ${Date.now() - (reactionKey.messageTimestamp ? Number(reactionKey.messageTimestamp) * 1000 : Date.now())}ms`
-      )
       return true
     } catch (e) {
-      console.error(`[${this.number}] ❌ فشل التفاعل على الحالة:`, e?.message || e)
+      logWarn(`[${this.number}] فشل التفاعل على الحالة:`, e?.message || e)
       return false
     }
   }
 
-  async handleSingleStatus(msg, source = 'unknown') {
-    if (!this.isStatusMessage(msg)) return
-
+  async processStatusNow(msg, participant) {
     const record = db.getNumber(this.userId, this.number)
     if (!record) return
+
+    const tasks = []
+    if (record.autoViewStatus !== false) tasks.push(this.markStatusSeen(msg, participant))
+    if (record.autoReactStatus !== false) tasks.push(this.reactToStatus(msg, participant))
+    if (!tasks.length) return
+
+    await Promise.allSettled(tasks)
+  }
+
+  async handleSingleStatus(msg, source = 'unknown') {
+    if (!this.isStatusMessage(msg)) return
+    if (!this.isFreshStatus(msg, source)) return
 
     const dedupKey = this.buildStatusDedupKey(msg)
     if (this.handledStatusIds.has(dedupKey)) return
@@ -662,15 +749,12 @@ class WaSession {
     this.pruneHandledStatuses()
 
     const participant = this.extractStatusParticipant(msg)
-    // Queue only this number's status work; other sessions never wait on this queue.
-    this.statusQueue = this.statusQueue.then(async () => {
-      await sleep(80)
-      if (record.autoViewStatus !== false) await this.markStatusSeen(msg, participant)
-      if (record.autoReactStatus !== false) {
-        const reacted = await this.reactToStatus(msg, participant)
-        if (reacted) console.log(`[${this.number}] تمت مشاهدة الحالة والتفاعل عليها ${record.emoji || '❤️'} من المصدر ${source}`)
-      }
-    }).catch((e) => console.error(`[${this.number}] status handler`, e?.message || e))
+    this.statusQueue = this.statusQueue
+      .then(async () => {
+        await this.processStatusNow(msg, participant)
+      })
+      .catch((e) => logError(`[${this.number}] status handler`, e?.message || e))
+
     await this.statusQueue
   }
 
@@ -711,7 +795,7 @@ async function stopSession(userId, number, logout = true) {
       if (typeof sock.end === 'function') sock.end(undefined)
     }
   } catch (e) {
-    console.error('[إيقاف]', e.message)
+    logError('[إيقاف]', e.message)
   }
   if (logout) {
     await target.deleteSessionData()
@@ -728,7 +812,7 @@ async function shutdownAll() {
     try {
       if (sock && typeof sock.end === 'function') sock.end(undefined)
     } catch (e) {
-      console.error(`[إغلاق ${ses.number}]`, e.message)
+      logError(`[إغلاق ${ses.number}]`, e.message)
     }
   }
 }
@@ -741,24 +825,26 @@ async function resumeAll() {
     const hasAuth = await authStateExists(item.userId, item.number)
     if (!hasAuth) {
       db.removeNumber(item.userId, item.number)
-      console.warn(`[استعادة] لا توجد بيانات جلسة محفوظة للرقم ${item.number} — تم حذف الرقم من القاعدة`)
+      logWarn(`[استعادة] لا توجد بيانات جلسة محفوظة للرقم ${item.number} — تم حذف الرقم من القاعدة`)
       continue
     }
     restorable.push(item)
   }
 
-  for (let i = 0; i < restorable.length; i++) {
-    const item = restorable[i]
-    setTimeout(() => {
-      startSession(item.userId, item.number, item.chatId, { resumed: true }).catch((e) =>
-        console.error(`[استعادة ${item.number}]`, e.message)
-      )
-    }, i * 3000)
-  }
+  if (!restorable.length) return
 
-  if (restorable.length) {
-    console.log(`♻️ استعادة ${restorable.length} جلسة واتساب محفوظة...`)
-  }
+  logInfo(`♻️ بدء استعادة ${restorable.length} جلسة واتساب محفوظة...`)
+
+  await runInBatches(
+    restorable,
+    config.RESUME_CONCURRENCY,
+    config.RESUME_BATCH_DELAY_MS,
+    async (item) => {
+      await startSession(item.userId, item.number, item.chatId, { resumed: true }).catch((e) =>
+        logError(`[استعادة ${item.number}]`, e.message)
+      )
+    }
+  )
 }
 
 async function broadcastToWhatsapp(text) {

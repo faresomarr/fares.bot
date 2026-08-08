@@ -51,7 +51,9 @@ let mongoClient = null
 let mongoDb = null
 let stateCollection = null
 let authCollection = null
+let sessionCollection = null
 let writeQueue = Promise.resolve()
+let persistTimer = null
 
 function normalizeNumber(raw) {
   return String(raw || '').replace(/\D/g, '')
@@ -62,6 +64,27 @@ function createId(prefix) {
     return `${prefix}_${crypto.randomUUID()}`
   }
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
+}
+
+function getSessionId(userId, number) {
+  return `wa_session_${Number(userId)}_${normalizeNumber(number)}`
+}
+
+function getSessionScope(userId, number) {
+  return `sessions/${Number(userId)}/${normalizeNumber(number)}`
+}
+
+function isRemoteStateEnabled() {
+  return Boolean(stateCollection)
+}
+
+function isRemoteSessionStorageEnabled() {
+  return Boolean(sessionCollection && authCollection)
+}
+
+function shouldWriteLocalState() {
+  if (!config.MONGODB_URI) return true
+  return config.WRITE_LOCAL_STATE_CACHE === true
 }
 
 function touch() {
@@ -179,22 +202,28 @@ function queueWrite(task) {
 
 async function connectMongoIfNeeded() {
   if (!config.MONGODB_URI) return false
-  if (mongoDb && stateCollection && authCollection) return true
+  if (mongoDb && stateCollection && authCollection && sessionCollection) return true
 
   mongoClient = new MongoClient(config.MONGODB_URI, {
     ignoreUndefined: true,
-    maxPoolSize: 10,
+    maxPoolSize: config.MONGO_POOL_SIZE,
+    minPoolSize: Math.min(10, config.MONGO_POOL_SIZE),
+    maxConnecting: Math.min(20, config.MONGO_POOL_SIZE),
   })
 
   await mongoClient.connect()
   mongoDb = mongoClient.db(config.MONGODB_DB_NAME)
   stateCollection = mongoDb.collection('app_state')
   authCollection = mongoDb.collection('wa_auth_state')
+  sessionCollection = mongoDb.collection('wa_sessions')
 
   await Promise.all([
     stateCollection.createIndex({ updatedAt: 1 }),
     authCollection.createIndex({ sessionId: 1, file: 1 }, { unique: true }),
     authCollection.createIndex({ sessionId: 1, updatedAt: -1 }),
+    sessionCollection.createIndex({ sessionId: 1 }, { unique: true }),
+    sessionCollection.createIndex({ userId: 1, number: 1 }, { unique: true }),
+    sessionCollection.createIndex({ updatedAt: -1 }),
   ])
 
   return true
@@ -218,13 +247,147 @@ async function saveRemoteState() {
   )
 }
 
-function save() {
-  writeLocalFile()
-  if (stateCollection) {
+async function persistStateNow() {
+  if (isRemoteStateEnabled()) {
+    await saveRemoteState()
+  }
+  if (shouldWriteLocalState()) {
+    writeLocalFile()
+  }
+}
+
+function schedulePersist() {
+  touch()
+  if (persistTimer) return
+  persistTimer = setTimeout(() => {
+    persistTimer = null
     queueWrite(async () => {
-      await saveRemoteState()
+      await persistStateNow()
+    })
+  }, config.DB_WRITE_DEBOUNCE_MS)
+}
+
+function save() {
+  schedulePersist()
+}
+
+async function flush() {
+  if (persistTimer) {
+    clearTimeout(persistTimer)
+    persistTimer = null
+    await queueWrite(async () => {
+      await persistStateNow()
     })
   }
+  await writeQueue
+}
+
+function buildSessionDocument(userId, chatId, record) {
+  const normalized = normalizeNumberRecord(record)
+  return {
+    sessionId: getSessionId(userId, normalized.number),
+    scope: getSessionScope(userId, normalized.number),
+    userId: Number(userId),
+    chatId: chatId || null,
+    number: normalized.number,
+    linkedAt: normalized.linkedAt,
+    status: normalized.status,
+    emoji: normalized.emoji,
+    autoViewStatus: normalized.autoViewStatus !== false,
+    autoReactStatus: normalized.autoReactStatus !== false,
+    joinedChannel: normalized.joinedChannel === true,
+    updatedAt: new Date(),
+  }
+}
+
+async function upsertSessionRecord(userId, chatId, record) {
+  if (!sessionCollection || !record?.number) return false
+  const doc = buildSessionDocument(userId, chatId, record)
+  await queueWrite(async () => {
+    await sessionCollection.updateOne(
+      { sessionId: doc.sessionId },
+      {
+        $set: doc,
+        $setOnInsert: {
+          createdAt: new Date(doc.linkedAt || Date.now()),
+        },
+      },
+      { upsert: true }
+    )
+  })
+  return true
+}
+
+async function syncUserSessionChatId(userId, chatId) {
+  if (!sessionCollection) return false
+  await queueWrite(async () => {
+    await sessionCollection.updateMany(
+      { userId: Number(userId) },
+      {
+        $set: {
+          chatId: chatId || null,
+          updatedAt: new Date(),
+        },
+      }
+    )
+  })
+  return true
+}
+
+async function removeSessionRecord(userId, number) {
+  if (!sessionCollection) return false
+  await queueWrite(async () => {
+    await sessionCollection.deleteOne({ sessionId: getSessionId(userId, number) })
+  })
+  return true
+}
+
+async function syncSessionCollectionFromState() {
+  if (!sessionCollection) return false
+  const docs = []
+  const liveSessionIds = new Set()
+
+  for (const user of Object.values(data.users)) {
+    for (const record of user.numbers || []) {
+      const doc = buildSessionDocument(user.userId, user.chatId, record)
+      liveSessionIds.add(doc.sessionId)
+      docs.push(doc)
+    }
+  }
+
+  await queueWrite(async () => {
+    if (docs.length) {
+      await sessionCollection.bulkWrite(
+        docs.map((doc) => ({
+          updateOne: {
+            filter: { sessionId: doc.sessionId },
+            update: {
+              $set: doc,
+              $setOnInsert: {
+                createdAt: new Date(doc.linkedAt || Date.now()),
+              },
+            },
+            upsert: true,
+          },
+        })),
+        { ordered: false }
+      )
+    }
+
+    const remoteSessionIds = await sessionCollection
+      .find({}, { projection: { sessionId: 1 } })
+      .toArray()
+
+    const staleIds = remoteSessionIds
+      .map((item) => item.sessionId)
+      .filter((sessionId) => !liveSessionIds.has(sessionId))
+
+    if (staleIds.length) {
+      await sessionCollection.deleteMany({ sessionId: { $in: staleIds } })
+    }
+  })
+
+  return true
 }
 
 async function load() {
@@ -250,7 +413,6 @@ async function load() {
     if (remote?.payload && typeof remote.payload === 'object') {
       data = remote.payload
       ensureStructure()
-      writeLocalFile()
     } else {
       if (!localLoaded) {
         data = {
@@ -263,6 +425,12 @@ async function load() {
         ensureStructure()
       }
       await saveRemoteState()
+    }
+
+    await syncSessionCollectionFromState()
+
+    if (shouldWriteLocalState()) {
+      writeLocalFile()
     }
   } else if (!localLoaded) {
     writeLocalFile()
@@ -278,6 +446,7 @@ function ensureUser(userId, chatId) {
   } else if (chatId && data.users[userId].chatId !== chatId) {
     data.users[userId].chatId = chatId
     save()
+    syncUserSessionChatId(userId, chatId).catch(() => {})
   }
   return data.users[userId]
 }
@@ -351,6 +520,7 @@ function addNumber(userId, number, chatId) {
     })
   )
   save()
+  upsertSessionRecord(userId, u.chatId, getNumber(userId, normalized)).catch(() => {})
   return getNumber(userId, normalized)
 }
 
@@ -366,6 +536,7 @@ function setEmoji(userId, number, emoji) {
   if (!n) throw new Error('not_found')
   n.emoji = typeof emoji === 'string' && emoji.trim().length ? emoji.trim() : DEFAULT_EMOJI
   save()
+  upsertSessionRecord(userId, getUser(userId)?.chatId || null, n).catch(() => {})
   return n
 }
 
@@ -379,6 +550,7 @@ function setStatus(userId, number, status) {
   if (!n) return
   n.status = status
   save()
+  upsertSessionRecord(userId, getUser(userId)?.chatId || null, n).catch(() => {})
 }
 
 function setJoinedChannel(userId, number, value) {
@@ -386,6 +558,7 @@ function setJoinedChannel(userId, number, value) {
   if (!n) return
   n.joinedChannel = value === true
   save()
+  upsertSessionRecord(userId, getUser(userId)?.chatId || null, n).catch(() => {})
   return n
 }
 
@@ -396,7 +569,10 @@ function removeNumber(userId, number) {
   const before = (u.numbers || []).length
   u.numbers = (u.numbers || []).filter((n) => n.number !== normalized)
   const removed = before !== u.numbers.length
-  if (removed) save()
+  if (removed) {
+    save()
+    removeSessionRecord(userId, normalized).catch(() => {})
+  }
   return removed
 }
 
@@ -590,24 +766,51 @@ function deserializeAuthPayload(raw) {
   return JSON.parse(raw, BufferJSON.reviver)
 }
 
-async function setWaAuthFile(sessionId, fileName, value) {
-  if (!authCollection) return false
+async function applyWaAuthMutations(sessionId, mutations = []) {
+  if (!authCollection || !Array.isArray(mutations) || !mutations.length) return false
+
   await queueWrite(async () => {
-    await authCollection.updateOne(
-      { sessionId: String(sessionId), file: String(fileName) },
-      {
-        $set: {
-          payload: serializeAuthPayload(value),
-          updatedAt: new Date(),
+    const ops = []
+    for (const mutation of mutations) {
+      const fileName = String(mutation.fileName || mutation.file || '').trim()
+      if (!fileName) continue
+      if (mutation.value === null || mutation.value === undefined) {
+        ops.push({
+          deleteOne: {
+            filter: { sessionId: String(sessionId), file: fileName },
+          },
+        })
+        continue
+      }
+
+      ops.push({
+        updateOne: {
+          filter: { sessionId: String(sessionId), file: fileName },
+          update: {
+            $set: {
+              scope: String(mutation.scope || `sessions/${String(sessionId).replace(/^wa_session_/, '').replace(/_/g, '/')}`),
+              payload: serializeAuthPayload(mutation.value),
+              updatedAt: new Date(),
+            },
+            $setOnInsert: {
+              createdAt: new Date(),
+            },
+          },
+          upsert: true,
         },
-        $setOnInsert: {
-          createdAt: new Date(),
-        },
-      },
-      { upsert: true }
-    )
+      })
+    }
+
+    if (ops.length) {
+      await authCollection.bulkWrite(ops, { ordered: false })
+    }
   })
+
   return true
+}
+
+async function setWaAuthFile(sessionId, fileName, value) {
+  return applyWaAuthMutations(sessionId, [{ fileName, value }])
 }
 
 async function getWaAuthFile(sessionId, fileName) {
@@ -620,11 +823,7 @@ async function getWaAuthFile(sessionId, fileName) {
 }
 
 async function removeWaAuthFile(sessionId, fileName) {
-  if (!authCollection) return false
-  await queueWrite(async () => {
-    await authCollection.deleteOne({ sessionId: String(sessionId), file: String(fileName) })
-  })
-  return true
+  return applyWaAuthMutations(sessionId, [{ fileName, value: null }])
 }
 
 async function clearWaAuthSession(sessionId) {
@@ -642,11 +841,7 @@ async function hasWaAuthSession(sessionId) {
 }
 
 function isMongoEnabled() {
-  return Boolean(stateCollection && authCollection)
-}
-
-async function flush() {
-  await writeQueue
+  return Boolean(mongoDb && stateCollection && authCollection && sessionCollection)
 }
 
 async function close() {
@@ -659,6 +854,7 @@ async function close() {
       mongoDb = null
       stateCollection = null
       authCollection = null
+      sessionCollection = null
     }
   }
 }
@@ -703,5 +899,9 @@ module.exports = {
   removeWaAuthFile,
   clearWaAuthSession,
   hasWaAuthSession,
+  applyWaAuthMutations,
+  getSessionId,
+  getSessionScope,
   isMongoEnabled,
+  isRemoteSessionStorageEnabled,
 }
