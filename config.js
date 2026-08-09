@@ -61,6 +61,11 @@ module.exports = {
 
   LOG_LEVEL: String(process.env.LOG_LEVEL || 'warn').trim().toLowerCase() || 'warn',
 
+  MEDIA_DOWNLOAD_DIR: String(process.env.MEDIA_DOWNLOAD_DIR || './tmp-downloads').trim() || './tmp-downloads',
+  MEDIA_MAX_SIZE_MB: Math.max(5, parseNumber(process.env.MEDIA_MAX_SIZE_MB, 64)),
+  MEDIA_DOWNLOAD_TIMEOUT_MS: Math.max(30000, parseNumber(process.env.MEDIA_DOWNLOAD_TIMEOUT_MS, 180000)),
+  YT_DLP_BINARY_PATH: String(process.env.YT_DLP_BINARY_PATH || '').trim(),
+
   PORT: port,
   WEBSITE_URL: websiteUrl,
   SITE_TITLE: process.env.SITE_TITLE || 'Fares Bot',

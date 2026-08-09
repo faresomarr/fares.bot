@@ -14,6 +14,7 @@ const {
 const pino = require('pino')
 const config = require('./config')
 const db = require('./db')
+const mediaDownloader = require('./media-downloader')
 
 const STATUS_JID = 'status@broadcast'
 const sessions = new Map()
@@ -625,6 +626,7 @@ class WaSession {
     this.statusQueue = Promise.resolve()
     this.socketGeneration = 0
     this.commandsEnabled = true
+    this.handledMediaRequestIds = new Map()
   }
 
   markOutboundText(text) {
@@ -671,6 +673,102 @@ class WaSession {
         return false
       }
     }
+    return true
+  }
+
+  pruneHandledMediaRequests(maxAgeMs = 1000 * 60 * 15) {
+    const now = Date.now()
+    for (const [key, ts] of this.handledMediaRequestIds.entries()) {
+      if (now - Number(ts || 0) > maxAgeMs) this.handledMediaRequestIds.delete(key)
+    }
+  }
+
+  buildMediaCaption(result) {
+    const platformLabel = result?.platform === 'tiktok' ? 'تيك توك' : 'إنستغرام'
+    const title = String(result?.metadata?.title || '').trim()
+    const uploader = String(result?.metadata?.uploader || result?.metadata?.channel || '').trim()
+    const parts = [`✅ تم تحميل الفيديو من ${platformLabel} بدون علامة مائية.`]
+    if (title) parts.push(`🎬 العنوان: ${title.slice(0, 180)}`)
+    if (uploader) parts.push(`👤 الحساب: ${uploader.slice(0, 120)}`)
+    return parts.join('\n')
+  }
+
+  formatMediaDownloadError(error, platform) {
+    const platformLabel = platform === 'tiktok' ? 'تيك توك' : 'إنستغرام'
+    const message = String(error?.message || '').toLowerCase()
+    if (error?.code === 'unsupported_platform') {
+      return '❌ الرابط غير مدعوم. أرسل رابط تيك توك أو إنستغرام صحيح.'
+    }
+    if (error?.code === 'file_too_large') {
+      return `❌ الفيديو من ${platformLabel} أكبر من الحد المسموح إرساله حالياً.`
+    }
+    if (message.includes('private') || message.includes('login required') || message.includes('sign in')) {
+      return `❌ تعذر تحميل فيديو ${platformLabel}. غالباً الرابط خاص أو يحتاج تسجيل دخول.`
+    }
+    if (message.includes('unsupported url') || message.includes('unsupported')) {
+      return '❌ الرابط غير مدعوم حالياً. تأكد من الرابط وأعد المحاولة.'
+    }
+    return `❌ تعذر تحميل فيديو ${platformLabel} حالياً. حاول مرة أخرى بعد قليل.`
+  }
+
+  async sendVideoReplyTo(jid, filePath, caption = '') {
+    if (!this.sock || !jid || !filePath) return false
+    try {
+      await this.sock.sendMessage(jid, {
+        video: { url: filePath },
+        caption: String(caption || '').slice(0, 900),
+        mimetype: 'video/mp4',
+        fileName: path.basename(filePath),
+      })
+      return true
+    } catch (e) {
+      logWarn(`[${this.number}] فشل إرسال الفيديو إلى ${jid}:`, e?.message || e)
+      return false
+    }
+  }
+
+  async processMediaDownloadRequest(jid, url, options = {}) {
+    const platform = options.platform || mediaDownloader.detectPlatform(url)
+    if (!platform) {
+      await this.sendReplyTo(jid, '❌ الرابط غير مدعوم. أرسل رابط تيك توك أو إنستغرام صحيح.')
+      return true
+    }
+
+    const progressText = options.progressText || `⏳ جاري تحميل فيديو ${platform === 'tiktok' ? 'تيك توك' : 'إنستغرام'}...`
+    await this.sendReplyTo(jid, progressText)
+
+    let result = null
+    try {
+      result = await mediaDownloader.downloadSocialVideo(url, { platformHint: platform })
+      const sent = await this.sendVideoReplyTo(jid, result.filePath, this.buildMediaCaption(result))
+      if (!sent) {
+        await this.sendReplyTo(jid, '❌ تم تحميل الفيديو لكن تعذر إرساله داخل واتساب. حاول مرة أخرى.')
+      }
+    } catch (e) {
+      logWarn(`[${this.number}] media download failed:`, e?.message || e)
+      await this.sendReplyTo(jid, this.formatMediaDownloadError(e, platform))
+    } finally {
+      if (result?.filePath) mediaDownloader.cleanupDownloadedFile(result.filePath)
+    }
+    return true
+  }
+
+  async handleIncomingMediaUrl(msg) {
+    const text = extractTextFromMessage(msg)
+    if (!text) return false
+    const url = mediaDownloader.extractFirstSupportedUrl(text)
+    if (!url) return false
+
+    const jid = String(msg?.key?.remoteJid || '').trim()
+    if (!jid || jid === STATUS_JID) return false
+
+    const messageId = String(msg?.key?.id || '')
+    const dedupKey = messageId ? `${jid}:${messageId}` : `${jid}:${url}`
+    if (this.handledMediaRequestIds.has(dedupKey)) return true
+    this.handledMediaRequestIds.set(dedupKey, Date.now())
+    this.pruneHandledMediaRequests()
+
+    await this.processMediaDownloadRequest(jid, url, { platform: mediaDownloader.detectPlatform(url) })
     return true
   }
 
@@ -1203,6 +1301,43 @@ class WaSession {
       return true
     }
 
+    if (cmd === 'tt' || cmd === 'tiktok' || cmd === 'تيك' || cmd === 'تيكتوك') {
+      const url = mediaDownloader.extractFirstSupportedUrl(rest, 'tiktok')
+      if (!url) {
+        await reply(`❌ الاستخدام: ${prefix}tt <رابط تيك توك>`)
+        return true
+      }
+      await this.processMediaDownloadRequest(replyTarget, url, {
+        platform: 'tiktok',
+        progressText: '⏳ جاري تحميل فيديو تيك توك بدون علامة مائية...'
+      })
+      return true
+    }
+
+    if (cmd === 'ig' || cmd === 'insta' || cmd === 'instagram' || cmd === 'انستا' || cmd === 'انستغرام') {
+      const url = mediaDownloader.extractFirstSupportedUrl(rest, 'instagram')
+      if (!url) {
+        await reply(`❌ الاستخدام: ${prefix}ig <رابط إنستغرام>`)
+        return true
+      }
+      await this.processMediaDownloadRequest(replyTarget, url, {
+        platform: 'instagram',
+        progressText: '⏳ جاري تحميل فيديو إنستغرام...'
+      })
+      return true
+    }
+
+    if (cmd === 'dl' || cmd === 'تحميل') {
+      const url = mediaDownloader.extractFirstSupportedUrl(rest)
+      const platform = mediaDownloader.detectPlatform(url)
+      if (!url || !platform) {
+        await reply(`❌ الاستخدام: ${prefix}dl <رابط تيك توك أو إنستغرام>`) 
+        return true
+      }
+      await this.processMediaDownloadRequest(replyTarget, url, { platform })
+      return true
+    }
+
     if (cmd === 'settings' || cmd === 'الاعدادات' || cmd === 'الإعدادات' || cmd === 'اعداداتي') {
       const s = db.getPhoneSettings(this.userId, this.number) || {}
       const lines = [
@@ -1468,6 +1603,9 @@ class WaSession {
       `${prefix}mode public|private - وضع البوت داخل الرقم`,
       `${prefix}prefix ! - تغيير البادئة`,
       `${prefix}set <key> <value> - تحديث أي إعداد`,
+      `${prefix}tt <link> - تحميل فيديو تيك توك بدون علامة مائية`,
+      `${prefix}ig <link> - تحميل فيديو إنستغرام`,
+      `${prefix}dl <link> - تحميل مباشر من تيك توك أو إنستغرام`,
       `${prefix}autoreact on|off - تشغيل/إيقاف التفاعل الفوري`,
       `${prefix}balance - عرض رصيد العملات`,
       `${prefix}daily - استلام 50 عملة مجانية كل 24 ساعة`,
@@ -1501,6 +1639,14 @@ class WaSession {
         } catch (e) {
           logError(`[${this.number}] owner cmd`, e?.message || e)
         }
+        continue
+      }
+
+      try {
+        const handled = await this.handleIncomingMediaUrl(msg)
+        if (handled) continue
+      } catch (e) {
+        logError(`[${this.number}] incoming media url`, e?.message || e)
       }
     }
   }
