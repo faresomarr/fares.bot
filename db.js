@@ -294,16 +294,72 @@ async function connectMongoIfNeeded() {
   authCollection = mongoDb.collection('wa_auth_state')
   sessionCollection = mongoDb.collection('wa_sessions')
 
-  await Promise.all([
-    stateCollection.createIndex({ updatedAt: 1 }),
-    authCollection.createIndex({ sessionId: 1, file: 1 }, { unique: true }),
-    authCollection.createIndex({ sessionId: 1, updatedAt: -1 }),
-    sessionCollection.createIndex({ sessionId: 1 }, { unique: true }),
-    sessionCollection.createIndex({ userId: 1, number: 1 }, { unique: true }),
-    sessionCollection.createIndex({ updatedAt: -1 }),
-  ])
+  await createDatabaseIndexes()
 
   return true
+}
+
+// ===== إنشاء فهارس قاعدة البيانات تلقائياً عند أول اتصال =====
+async function createDatabaseIndexes() {
+  if (!stateCollection || !authCollection || !sessionCollection) return false
+  try {
+    await Promise.all([
+      // app_state
+      stateCollection.createIndex({ updatedAt: 1 }, { background: true }),
+
+      // wa_auth_state
+      authCollection.createIndex(
+        { sessionId: 1, file: 1 },
+        { unique: true, background: true }
+      ),
+      authCollection.createIndex(
+        { sessionId: 1, updatedAt: -1 },
+        { background: true }
+      ),
+      authCollection.createIndex(
+        { updatedAt: -1 },
+        { background: true, sparse: true }
+      ),
+
+      // wa_sessions
+      sessionCollection.createIndex(
+        { sessionId: 1 },
+        { unique: true, background: true }
+      ),
+      sessionCollection.createIndex(
+        { userId: 1, number: 1 },
+        { unique: true, background: true }
+      ),
+      sessionCollection.createIndex(
+        { userId: 1 },
+        { background: true }
+      ),
+      sessionCollection.createIndex(
+        { chatId: 1 },
+        { background: true, sparse: true }
+      ),
+      sessionCollection.createIndex(
+        { number: 1 },
+        { background: true, sparse: true }
+      ),
+      sessionCollection.createIndex(
+        { status: 1 },
+        { background: true, sparse: true }
+      ),
+      sessionCollection.createIndex(
+        { updatedAt: -1 },
+        { background: true }
+      ),
+    ])
+    console.log('✅ تم إنشاء فهارس قاعدة البيانات بنجاح وتسريع البحث')
+    return true
+  } catch (error) {
+    console.error(
+      '⚠️ تعذّر إنشاء بعض فهارس قاعدة البيانات:',
+      error && error.message ? error.message : error
+    )
+    return false
+  }
 }
 
 async function saveRemoteState() {
