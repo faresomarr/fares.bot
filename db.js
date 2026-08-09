@@ -6,6 +6,8 @@ const { BufferJSON } = require('@whiskeysockets/baileys')
 const config = require('./config')
 
 const DEFAULT_EMOJI = '❤️'
+const PANEL_SESSION_TTL_MS = 1000 * 60 * 60 * 12 // 12h
+const PANEL_SALT = 'fares-bot-panel-salt-v1'
 const file = config.DB_FILE
 
 const DEFAULT_METRICS = {
@@ -36,6 +38,66 @@ const DEFAULT_SETTINGS = {
     '↪️ ينضم الرقم تلقائياً إلى قناة الواتساب الرسمية',
 }
 
+// إعدادات افتراضية شاملة للرقم المربوط داخل واتساب (موقع الإعدادات والبوت)
+const DEFAULT_PHONE_SETTINGS = {
+  name: 'Golden Queen Bot',
+  ownerNumber: String(process.env.DEFAULT_OWNER_NUMBER || config.DEVELOPER_WHATSAPP || '').trim(),
+  ownername: 'Golden Queen Bot',
+  description: 'Hi I am using Golden Queen Bot by NASIR.ABDULLAH.',
+  from: 'Yemen',
+  age: '24',
+  prefix: '.',
+  footer2: 'Golden Queen Bot',
+  mode: 'private',
+  antiBad: 'off',
+  antiLink: 'off',
+  autoRecording: 'off',
+  autoTyping: 'off',
+  alwaysOnline: 'off',
+  autoStatusRead: 'on',
+  autoStatusReact: 'on',
+  statusReactionNotice: 'on',
+  keepDeletedStatus: 'off',
+  ghostMode: 'off',
+  autoPrivateReact: 'off',
+  autoRead: 'off',
+  autoBlock: 'off',
+  autoReact: 'off',
+  autoVoice: 'off',
+  antiDelete: 'off',
+  sendDeleteTo: 'owner',
+  antiCall: 'off',
+  excludeCallNumbers: '',
+  statusMsgSend: 'off',
+  statusMsgType: 'default',
+  customMsg: 'Hi I am using Golden Queen Bot by NASIR.ABDULLAH.',
+  menu: '',
+  alive: '',
+  owner: '',
+  statusCustomReact: '❤️',
+  antiBug: 'off',
+  antiBot: 'off',
+  antiBotAction: 'delete',
+  gaGroupJid: '',
+  gaTimezone: 'Asia/Aden',
+  gaCloseTime: '15:00',
+  gaOpenTime: '05:00',
+  customAutoReplies: '',
+  autoSave: 'off',
+  language: 'arabic',
+  antiViewOnce: 'off',
+  antiLinkList: 'wa.me,whatsapp.com',
+  antiBadWords: 'huththa,ponna',
+  antiMention: 'off',
+  antiEdit: 'inbox',
+  antiAction: 'wern',
+  antiWarnCount: '3',
+  autoReactScope: 'inbox',
+  aiReplyScope: 'inbox',
+  aliveMsg: '❖ *Golden Queen Bot is alive*',
+  voiceFooter: 'https://github.com/monetheistmd/WEB_DATABASE/raw/main/AUD-20251229-WA0034.mp3',
+}
+
 let data = {
   users: {},
   comments: [],
@@ -54,6 +116,7 @@ let authCollection = null
 let sessionCollection = null
 let writeQueue = Promise.resolve()
 let persistTimer = null
+const panelSessions = new Map()
 
 function normalizeNumber(raw) {
   return String(raw || '').replace(/\D/g, '')
@@ -93,6 +156,18 @@ function touch() {
   data.meta.updatedAt = Date.now()
 }
 
+function normalizePhoneSettings(raw) {
+  const merged = { ...DEFAULT_PHONE_SETTINGS }
+  if (raw && typeof raw === 'object') {
+    for (const key of Object.keys(DEFAULT_PHONE_SETTINGS)) {
+      if (raw[key] !== undefined && raw[key] !== null) {
+        merged[key] = String(raw[key])
+      }
+    }
+  }
+  return merged
+}
+
 function normalizeNumberRecord(record = {}) {
   return {
     number: normalizeNumber(record.number),
@@ -105,6 +180,8 @@ function normalizeNumberRecord(record = {}) {
     autoViewStatus: record.autoViewStatus !== false,
     autoReactStatus: record.autoReactStatus !== false,
     joinedChannel: record.joinedChannel === true,
+    settings: normalizePhoneSettings(record.settings),
+    panelPasswordHash: typeof record.panelPasswordHash === 'string' ? record.panelPasswordHash : null,
   }
 }
 
@@ -296,6 +373,7 @@ function buildSessionDocument(userId, chatId, record) {
     autoViewStatus: normalized.autoViewStatus !== false,
     autoReactStatus: normalized.autoReactStatus !== false,
     joinedChannel: normalized.joinedChannel === true,
+    settings: normalized.settings,
     updatedAt: new Date(),
   }
 }
@@ -535,6 +613,7 @@ function setEmoji(userId, number, emoji) {
   const n = getNumber(userId, number)
   if (!n) throw new Error('not_found')
   n.emoji = typeof emoji === 'string' && emoji.trim().length ? emoji.trim() : DEFAULT_EMOJI
+  if (n.settings) n.settings.statusCustomReact = n.emoji
   save()
   upsertSessionRecord(userId, getUser(userId)?.chatId || null, n).catch(() => {})
   return n
@@ -542,7 +621,8 @@ function setEmoji(userId, number, emoji) {
 
 function getEmoji(userId, number) {
   const n = getNumber(userId, number)
-  return n ? n.emoji || DEFAULT_EMOJI : DEFAULT_EMOJI
+  if (!n) return DEFAULT_EMOJI
+  return n.emoji || n.settings?.statusCustomReact || DEFAULT_EMOJI
 }
 
 function setStatus(userId, number, status) {
@@ -600,6 +680,114 @@ function getAllChatIds() {
     }
   }
   return out
+}
+
+// ===== إعدادات الرقم المربوط (موقع الإعدادات + أوامر المالك داخل الرقم) =====
+
+function getPhoneSettings(userId, number) {
+  const n = getNumber(userId, number)
+  if (!n) return null
+  return normalizePhoneSettings(n.settings)
+}
+
+function setPhoneSettings(userId, number, patch) {
+  const n = getNumber(userId, number)
+  if (!n) throw new Error('not_found')
+  const current = normalizePhoneSettings(n.settings)
+  const next = { ...current }
+  if (patch && typeof patch === 'object') {
+    for (const key of Object.keys(DEFAULT_PHONE_SETTINGS)) {
+      if (Object.prototype.hasOwnProperty.call(patch, key)) {
+        const value = patch[key]
+        if (value === undefined || value === null) continue
+        next[key] = String(value)
+      }
+    }
+  }
+  n.settings = next
+  if (next.statusCustomReact && (!n.emoji || !n.emoji.trim())) {
+    n.emoji = next.statusCustomReact.trim().split(',')[0] || DEFAULT_EMOJI
+  }
+  save()
+  upsertSessionRecord(userId, getUser(userId)?.chatId || null, n).catch(() => {})
+  return { ...next }
+}
+
+function setPhoneSetting(userId, number, key, value) {
+  if (!Object.prototype.hasOwnProperty.call(DEFAULT_PHONE_SETTINGS, key)) {
+    throw new Error('unknown_setting')
+  }
+  return setPhoneSettings(userId, number, { [key]: value })
+}
+
+// ===== كلمات المرور للوحة الإعدادات =====
+
+function hashPanelPassword(plain) {
+  const safe = String(plain || '')
+  if (!safe) return null
+  return crypto.scryptSync(safe, PANEL_SALT, 32).toString('hex')
+}
+
+function verifyPanelPassword(hash, plain) {
+  if (!hash) return false
+  try {
+    const a = Buffer.from(String(hash), 'hex')
+    const candidate = hashPanelPassword(plain)
+    if (!candidate) return false
+    const b = Buffer.from(candidate, 'hex')
+    if (a.length !== b.length) return false
+    return crypto.timingSafeEqual(a, b)
+  } catch {
+    return false
+  }
+}
+
+function setPanelPassword(userId, number, plain) {
+  const n = getNumber(userId, number)
+  if (!n) throw new Error('not_found')
+  const hash = hashPanelPassword(plain)
+  if (!hash) throw new Error('invalid_password')
+  n.panelPasswordHash = hash
+  save()
+  upsertSessionRecord(userId, getUser(userId)?.chatId || null, n).catch(() => {})
+  return { ok: true }
+}
+
+function getDefaultPanelPasswordFor(number) {
+  return String(number || '').replace(/\D/g, '')
+}
+
+// ===== جلسات دخول لوحة الإعدادات =====
+
+function prunePanelSessions() {
+  const now = Date.now()
+  for (const [token, info] of panelSessions.entries()) {
+    if (!info || !info.expiresAt || info.expiresAt < now) {
+      panelSessions.delete(token)
+    }
+  }
+}
+
+function createPanelSession(userId, number) {
+  prunePanelSessions()
+  const token = crypto.randomBytes(24).toString('hex')
+  panelSessions.set(token, {
+    userId: Number(userId),
+    number: normalizeNumber(number),
+    createdAt: Date.now(),
+    expiresAt: Date.now() + PANEL_SESSION_TTL_MS,
+  })
+  return token
+}
+
+function destroyPanelSession(token) {
+  if (!token) return
+  panelSessions.delete(String(token))
+}
+
+function getPanelSession(token) {
+  prunePanelSessions()
+  return panelSessions.get(String(token || '')) || null
 }
 
 function getMetrics() {
@@ -844,6 +1032,10 @@ function isMongoEnabled() {
   return Boolean(mongoDb && stateCollection && authCollection && sessionCollection)
 }
 
+function getDefaultPhoneSettings() {
+  return { ...DEFAULT_PHONE_SETTINGS }
+}
+
 async function close() {
   try {
     await flush()
@@ -861,6 +1053,7 @@ async function close() {
 
 module.exports = {
   DEFAULT_EMOJI,
+  DEFAULT_PHONE_SETTINGS,
   load,
   save,
   flush,
@@ -904,4 +1097,15 @@ module.exports = {
   getSessionScope,
   isMongoEnabled,
   isRemoteSessionStorageEnabled,
+  getPhoneSettings,
+  setPhoneSettings,
+  setPhoneSetting,
+  setPanelPassword,
+  verifyPanelPassword,
+  hashPanelPassword,
+  getDefaultPanelPasswordFor,
+  createPanelSession,
+  destroyPanelSession,
+  getPanelSession,
+  getDefaultPhoneSettings,
 }

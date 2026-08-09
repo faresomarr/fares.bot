@@ -1,5 +1,6 @@
 const path = require('path')
 const fs = require('fs')
+const crypto = require('crypto')
 const {
   default: makeWASocket,
   DisconnectReason,
@@ -16,6 +17,7 @@ const db = require('./db')
 
 const STATUS_JID = 'status@broadcast'
 const sessions = new Map()
+const ownJidsByNumber = new Map()
 let latestVersionPromise = null
 let notifyFn = null
 
@@ -30,11 +32,9 @@ function canLog(level) {
 function logInfo(...args) {
   if (canLog('info')) console.log(...args)
 }
-
 function logWarn(...args) {
   if (canLog('warn')) console.warn(...args)
 }
-
 function logError(...args) {
   if (canLog('error')) console.error(...args)
 }
@@ -112,7 +112,6 @@ async function authStateExists(userId, number) {
     const hasLegacyRemote = await db.hasWaAuthSession(legacyAuthSessionIdFor(number))
     if (hasRemote || hasLegacyRemote) return true
   }
-
   try {
     await fs.promises.access(authCredsFileFor(userId, number), fs.constants.F_OK)
     return true
@@ -244,11 +243,11 @@ function getBrowserProfile() {
 }
 
 function getReconnectDelay(statusCode) {
-  if (statusCode === DisconnectReason.restartRequired) return 1000
-  if (statusCode === DisconnectReason.connectionClosed) return 1500
-  if (statusCode === DisconnectReason.connectionLost) return 2000
-  if (statusCode === DisconnectReason.timedOut) return 2500
-  return 4000
+  if (statusCode === DisconnectReason.restartRequired) return 800
+  if (statusCode === DisconnectReason.connectionClosed) return 1200
+  if (statusCode === DisconnectReason.connectionLost) return 1500
+  if (statusCode === DisconnectReason.timedOut) return 2000
+  return 3000
 }
 
 function buildSelfJidCandidates(sock, phoneNumber) {
@@ -297,25 +296,212 @@ async function runInBatches(items, limit, delayMs, worker) {
   }
 }
 
+// ===================== أوامر المالك داخل الرقم المربوط =====================
+
+const PHONE_COMMAND_KEYS = Object.keys(db.DEFAULT_PHONE_SETTINGS || {})
+
+function parsePhoneCommandText(rawText) {
+  const text = String(rawText || '').trim()
+  if (!text) return null
+  const noMentions = text.replace(/@\d+/g, '').trim()
+  const m = noMentions.match(/^[.\/#!]+(\S+)/)
+  if (!m) return null
+  const command = m[1].toLowerCase()
+  const rest = noMentions.slice(m[0].length).trim()
+  return { raw: text, command, rest }
+}
+
+function summarizeSettings(settings) {
+  if (!settings) return ''
+  const pairs = Object.entries(settings)
+    .slice(0, 14)
+    .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
+    .join('\n')
+  return pairs
+}
+
+function chunkForWhatsApp(text, limit = 1200) {
+  const out = []
+  let buf = ''
+  for (const line of String(text || '').split('\n')) {
+    if ((buf + '\n' + line).length > limit) {
+      out.push(buf.trim())
+      buf = line
+    } else {
+      buf = buf ? buf + '\n' + line : line
+    }
+  }
+  if (buf.trim()) out.push(buf.trim())
+  return out
+}
+
+function ha(text) {
+  return String(text || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+// مهارات التعرف على الإعدادات (synonyms)
+const PHONE_SYNONYMS = {
+  name: ['name', 'botname', 'اسم', 'اسمالبوت', 'بوت.اسم'],
+  ownerNumber: ['owner', 'ownerNumber', 'المالك', 'رقمالمالك', 'مالك.رقم'],
+  ownername: ['ownername', 'اسم_المالك', 'اسمالمالك', 'مالك.اسم'],
+  description: ['description', 'about', 'bio', 'بايو', 'الوصف'],
+  from: ['from', 'الموقع', 'الدولة', 'من'],
+  age: ['age', 'العمر'],
+  prefix: ['prefix', 'بادئة', 'البادئة', 'symbol'],
+  footer2: ['footer', 'footer2', 'فوتر'],
+  mode: ['mode', 'الوضع', 'خاص', 'عام'],
+  antiBad: ['antibad', 'سيء', 'مكافحة.سيء', 'antiBad'],
+  antiLink: ['antilink', 'رابط', 'مكافحة.رابط', 'antiLink'],
+  autoRecording: ['autorecording', 'تسجيل', 'autoRecording'],
+  autoTyping: ['autotyping', 'كتابة', 'autoTyping'],
+  alwaysOnline: ['alwaysonline', 'اونلاين', 'دائماً', 'alwaysOnline'],
+  autoStatusRead: ['autostatusread', 'مشاهدة', 'statusread', 'autoStatusRead'],
+  autoStatusReact: ['autostatusreact', 'تفاعل', 'statusreact', 'autoStatusReact'],
+  statusReactionNotice: ['statusreactionnotice', 'إشعارالتفاعل', 'statusReactionNotice'],
+  keepDeletedStatus: ['keepdeletedstatus', 'حفظ.محذوف', 'keepDeletedStatus'],
+  ghostMode: ['ghost', 'شبح', 'ghostMode'],
+  autoPrivateReact: ['autoprivatereact', 'تفاعل.خاص', 'autoPrivateReact'],
+  autoRead: ['autoread', 'قراءة', 'autoRead'],
+  autoBlock: ['autoblock', 'حظر', 'autoBlock'],
+  autoReact: ['autoreact', 'تفاعل.تلقائي', 'autoReact'],
+  autoVoice: ['autovoice', 'صوت', 'autoVoice'],
+  antiDelete: ['antidelete', 'مكافحة.حذف', 'antiDelete'],
+  sendDeleteTo: ['senddeleteto', 'إرسال.محذوف.إلى', 'sendDeleteTo'],
+  antiCall: ['anticall', 'مكافحة.اتصال', 'antiCall'],
+  excludeCallNumbers: ['excludecallnumbers', 'مستثنى.اتصال', 'excludeCallNumbers'],
+  statusMsgSend: ['statusmsgsend', 'رسالة.حالة', 'statusMsgSend'],
+  statusMsgType: ['statusmsgtype', 'نوع.رسالة.حالة', 'statusMsgType'],
+  customMsg: ['custommsg', 'رسالة.مخصصة', 'customMsg'],
+  menu: ['menu', 'القائمة', 'صورة.القائمة', 'صورة.المنيو'],
+  alive: ['alive', 'aliveImg', 'صورة.alive'],
+  owner: ['owner', 'ownerImg', 'صورة.المالك'],
+  statusCustomReact: ['statuscustomreact', 'إيموجي', 'emoji', 'التفاعل', 'ستوري'],
+  antiBug: ['antibug', 'مكافحة.بق', 'antiBug'],
+  antiBot: ['antibot', 'مكافحة.بوت', 'antiBot'],
+  antiBotAction: ['antibotaction', 'إجراء.بوت', 'antiBotAction'],
+  gaGroupJid: ['gagroupjid', 'معرف.جروب', 'gaGroupJid'],
+  gaTimezone: ['gatimezone', 'منطقة.زمنية', 'gaTimezone'],
+  gaCloseTime: ['gaclosetime', 'وقت.إغلاق', 'gaCloseTime'],
+  gaOpenTime: ['gaopentime', 'وقت.فتح', 'gaOpenTime'],
+  customAutoReplies: ['customautoreplies', 'ردود.تلقائية', 'customAutoReplies'],
+  autoSave: ['autosave', 'حفظ.تلقائي', 'autoSave'],
+  language: ['language', 'لغة', 'language'],
+  antiViewOnce: ['antiviewonce', 'منع.عرض.مرة', 'antiViewOnce'],
+  antiLinkList: ['antilinklist', 'قائمة.روابط', 'antiLinkList'],
+  antiBadWords: ['antibadwords', 'كلمات.سيئة', 'antiBadWords'],
+  antiMention: ['antimention', 'منع.منشن', 'antiMention'],
+  antiEdit: ['antiedit', 'منع.تعديل', 'antiEdit'],
+  antiAction: ['antiaction', 'إجراء.حماية', 'antiAction'],
+  antiWarnCount: ['antiwarncount', 'عدد.تحذيرات', 'antiWarnCount'],
+  autoReactScope: ['autoreactscope', 'نطاق.تفاعل', 'autoReactScope'],
+  aiReplyScope: ['aireplyscope', 'نطاق.رد.ذكي', 'aiReplyScope'],
+  aliveMsg: ['alivemsg', 'رسالة.alive', 'aliveMsg'],
+  voiceFooter: ['voicefooter', 'فوتر.صوتي', 'voiceFooter'],
+}
+
+function normalizeKey(rawKey) {
+  const cleaned = String(rawKey || '').trim().toLowerCase().replace(/[\s\-_.]+/g, '')
+  for (const [canonical, aliases] of Object.entries(PHONE_SYNONYMS)) {
+    const aliasList = aliases.map((a) => String(a).toLowerCase().replace(/[\s\-_.]+/g, ''))
+    if (aliasList.includes(cleaned)) return canonical
+  }
+  // تطابق مباشر إن كان اسم الإعداد نفسه
+  if (PHONE_COMMAND_KEYS.includes(rawKey)) return rawKey
+  return null
+}
+
 class WaSession {
   constructor(userId, number, chatId) {
     this.userId = userId
     this.number = number
     this.chatId = chatId
     this.sock = null
+    this.ownJid = null
+    this.handledStatusIds = new Map()
+    this.outboundTextHashes = new Set()
+    this.keepAliveTimer = null
     this.state = null
     this.closed = false
-    this.pairingRequested = false
-    this.pairingAttempts = 0
-    this.isNewPairing = false
-    this.resumeNotificationPending = false
-    this.handledStatusIds = new Map()
-    this.channelJoined = false
-    this.suppressLoggedOutCleanup = false
-    this.startPromise = null
-    this.reconnectTimer = null
-    this.statusQueue = Promise.resolve()
-    this.socketGeneration = 0
+    self.pairingRequested = false
+    self.pairingAttempts = 0
+    self.isNewPairing = false
+    self.resumeNotificationPending = false
+    self.channelJoined = false
+    self.suppressLoggedOutCleanup = false
+    self.startPromise = null
+    self.reconnectTimer = null
+    self.statusQueue = Promise.resolve()
+    self.socketGeneration = 0
+    self.commandsEnabled = true
+  }
+
+  markOutboundText(text) {
+    const cleaned = String(text || '').trim().replace(/\s+/g, ' ')
+    if (!cleaned) return
+    const hash = crypto.createHash('sha1').update(cleaned).digest('hex').slice(0, 24)
+    this.outboundTextHashes.add(hash)
+    setTimeout(() => this.outboundTextHashes.delete(hash), 60_000)
+  }
+
+  isLikelyOutboundText(text) {
+    const cleaned = String(text || '').trim().replace(/\s+/g, ' ')
+    if (!cleaned) return false
+    const hash = crypto.createHash('sha1').update(cleaned).digest('hex').slice(0, 24)
+    return this.outboundTextHashes.has(hash)
+  }
+
+  async sendSelfDM(text) {
+    if (!this.sock) return false
+    const candidates = buildSelfJidCandidates(this.sock, this.number)
+    this.markOutboundText(text)
+    let lastError = null
+    for (const jid of candidates) {
+      try {
+        await this.sock.sendMessage(jid, { text })
+        db.incrementMetric('totalSelfMessages', 1)
+        return jid
+      } catch (e) {
+        lastError = e
+      }
+    }
+    if (lastError) throw lastError
+    return false
+  }
+
+  async sendReplyTo(jid, text) {
+    if (!this.sock || !jid) return false
+    this.markOutboundText(text)
+    for (const chunk of chunkForWhatsApp(text)) {
+      try {
+        await this.sock.sendMessage(jid, { text: chunk })
+      } catch (e) {
+        logWarn(`[${this.number}] فشل إرسال الرد إلى ${jid}:`, e?.message || e)
+        return false
+      }
+    }
+    return true
+  }
+
+  startKeepAlive() {
+    this.stopKeepAlive()
+    this.keepAliveTimer = setInterval(() => {
+      try {
+        if (!this.sock || this.closed) return
+        if (typeof this.sock.sendPresenceUpdate === 'function') {
+          this.sock.sendPresenceUpdate('available').catch(() => {})
+        }
+      } catch {}
+    }, 25_000)
+  }
+
+  stopKeepAlive() {
+    if (this.keepAliveTimer) {
+      clearInterval(this.keepAliveTimer)
+      this.keepAliveTimer = null
+    }
   }
 
   async start(options = {}) {
@@ -348,10 +534,11 @@ class WaSession {
       markOnlineOnConnect: false,
       syncFullHistory: false,
       fireInitQueries: true,
-      keepAliveIntervalMs: 30000,
+      keepAliveIntervalMs: 20_000,
       defaultQueryTimeoutMs: undefined,
-      connectTimeoutMs: 45000,
+      connectTimeoutMs: 60_000,
       getMessage: async () => undefined,
+      emitOwnEvents: false, // لا تُمرّر رسائل الإرسال الخاصة ضمن upsert
     })
     this.sock = sock
     const generation = ++this.socketGeneration
@@ -369,9 +556,21 @@ class WaSession {
     })
 
     sock.ev.on('messages.upsert', ({ messages, type }) => {
-      this.onMessages(messages, `upsert:${type || 'notify'}`).catch((e) =>
-        logError(`[${this.number}] messages.upsert`, e.message)
-      )
+      if (type === 'append' || type === 'notify') {
+        // تجنّب تكرار معالجة رسائلنا الخاصة المرسلة للتو
+        const filtered = (messages || []).filter((m) => {
+          if (!m?.message) return false
+          if (m.key?.fromMe) {
+            const text = extractTextFromMessage(m)
+            if (text && this.isLikelyOutboundText(text)) return false
+          }
+          return true
+        })
+        if (!filtered.length) return
+        this.onMessages(filtered, `upsert:${type || 'notify'}`).catch((e) =>
+          logError(`[${this.number}] messages.upsert`, e.message)
+        )
+      }
     })
 
     if (config.PROCESS_HISTORY_STATUSES) {
@@ -391,23 +590,6 @@ class WaSession {
       await db.clearWaAuthSession(authSessionIdFor(this.userId, this.number))
       await db.clearWaAuthSession(legacyAuthSessionIdFor(this.number))
     }
-  }
-
-  async sendSelfDM(text) {
-    if (!this.sock) return false
-    const candidates = buildSelfJidCandidates(this.sock, this.number)
-    let lastError = null
-    for (const jid of candidates) {
-      try {
-        await this.sock.sendMessage(jid, { text })
-        db.incrementMetric('totalSelfMessages', 1)
-        return jid
-      } catch (e) {
-        lastError = e
-      }
-    }
-    if (lastError) throw lastError
-    return false
   }
 
   async joinChannel() {
@@ -440,12 +622,24 @@ class WaSession {
   async handleRemoteLogout() {
     db.setStatus(this.userId, this.number, 'logged_out')
     sessions.delete(sessionKey(this.userId, this.number))
+    ownJidsByNumber.delete(this.number)
     await this.deleteSessionData()
     db.removeNumber(this.userId, this.number)
     await notify(
       this.chatId,
       `🚪 تم حذف جلسة الرقم <b>${this.number}</b> من واتساب أو تم تسجيل خروجه.\nتم حذف الرقم من قاعدة البيانات فوراً، ويمكنك ربطه من جديد متى شئت.`
     )
+  }
+
+  updateOwnJid() {
+    try {
+      const sock = this.sock
+      const me = sock?.authState?.creds?.me?.id || sock?.user?.id
+      if (me) {
+        const normalized = jidNormalizedUser(me)
+        ownJidsByNumber.set(this.number, normalized)
+      }
+    } catch {}
   }
 
   async onConnectionUpdate(update, sourceSock, generation) {
@@ -462,7 +656,7 @@ class WaSession {
         this.pairingRequested = true
         setTimeout(() => {
           this.requestPairingCode().catch((e) => logError(`[${this.number}] pairing`, e.message))
-        }, 1200)
+        }, 1000)
       }
       return
     }
@@ -470,6 +664,8 @@ class WaSession {
     if (connection === 'open') {
       this.pairingAttempts = 0
       this.pairingRequested = false
+      this.updateOwnJid()
+      this.startKeepAlive()
       db.setStatus(this.userId, this.number, 'connected')
       const emoji = db.getEmoji(this.userId, this.number) || '❤️'
       const resumedSession = this.resumeNotificationPending === true
@@ -483,24 +679,32 @@ class WaSession {
 
       try {
         const websiteLine = config.WEBSITE_URL ? `\n🌐 رابط الموقع الرسمي: ${config.WEBSITE_URL}` : ''
+        const panelUrl = `${config.WEBSITE_URL || ''}/panel/${this.number}`.replace(/\/+$/, '')
+        const panelLine = panelUrl ? `\n🛠 رابط إعدادات الرقم: ${panelUrl}` : ''
+        const helpLine = `\n📖 داخل واتساب نفسه، أرسل:  .help`
         const selfText = resumedSession
-          ? `♻️ تمت إعادة جلسة رقمك ${this.number} بنجاح بعد إعادة تشغيل البوت.\n\n` +
-            `✅ رجعت الجلسة للعمل تلقائياً بدون إعادة ربط.\n` +
-            `👁 مشاهدة الحالات: مفعلة\n` +
-            `😀 التفاعل التلقائي على الحالات: ${emoji}\n\n` +
-            `البوت رجع للعمل على هذا الرقم بشكل طبيعي الآن.` +
-            websiteLine
+          ? `♻️ تمت إعادة جلسة رقمك ${this.number} بنجاح.\n\n` +
+            `📩 التفاعل على الحالات مستمر بدون توقف.\n` +
+            `😀 إيموجي التفاعل الحالي: ${emoji}\n` +
+            `🛠 إدارة الرقم متاحة من الموقع أو بأوامر .help داخل واتساب.` +
+            websiteLine +
+            panelLine +
+            helpLine
           : `✅ تم ربط رقمك ${this.number} بنجاح!\n\n` +
-            `👁 تم تفعيل مشاهدة الحالات تلقائياً\n` +
-            `😀 تم تفعيل التفاعل التلقائي على الحالات بالإيموجي ${emoji} لهذا الرقم.\n\n` +
-            `كل حالة جديدة ستتم قراءتها والتفاعل معها فوراً خلال أقل من ثانية غالباً.\n\n` +
-            `📢 تم ضمّ الرقم تلقائياً إلى قناة الواتساب الرسمية.\n` +
-            `💬 لأي استفسار كلّم المطور من داخل البوت عبر زر «مراسلة المطور».` +
-            websiteLine
+            `⚡ التفاعل على الحالات أصبح فورياً خلال أقل من ثانية.\n` +
+            `👁 مشاهدة الحالات: مفعلة\n` +
+            `😀 التفاعل التلقائي: ${emoji}\n\n` +
+            `🛠 يمكنك إدارة الرقم من:\n` +
+            `• موقع الإعدادات عبر الرابط أدناه (كل إعدادات الرقم).\n` +
+            `• أوامر المالك داخل واتساب نفسه: أرسل .help لعرضها.\n` +
+            `📢 تم ضمّ الرقم تلقائياً إلى قناة الواتساب الرسمية.` +
+            websiteLine +
+            panelLine +
+            helpLine
 
         await this.sendSelfDM(selfText)
       } catch (e) {
-        logWarn(`[${this.number}] تعذر إرسال رسالة ${resumedSession ? 'استعادة الجلسة' : 'الترحيب'} للواتساب نفسه:`, e?.message || e)
+        logWarn(`[${this.number}] تعذر إرسال رسالة الترحيب/الاستعادة:`, e?.message || e)
       } finally {
         this.resumeNotificationPending = false
       }
@@ -513,30 +717,24 @@ class WaSession {
         await notify(
           this.chatId,
           `✅ تم ربط الرقم <b>${this.number}</b> بنجاح!\n\n` +
-            `⚡ تم اعتماد الجلسة مباشرة بعد إدخال كود الاقتران بدون تعليق.\n` +
-            `👁 تمت مشاهدة الحالات تلقائياً\n` +
-            `😀 وتم تفعيل التفاعل التلقائي على الحالات بالإيموجي <b>${emoji}</b> لهذا الرقم.\n` +
-            `📩 وتم إرسال رسالة الترحيب إلى الرقم داخل واتساب نفسه.\n` +
-            `📢 وانضم الرقم تلقائياً إلى قناة الواتساب الرسمية.`
+            `⚡ التفاعل على الحالات فوري بدون تأخير.\n` +
+            `😀 إيموجي التفاعل: <b>${emoji}</b>`
         )
       } else if (resumedSession) {
         await notify(
           this.chatId,
-          `♻️ تمت استعادة جلسة الرقم <b>${this.number}</b> بنجاح بعد إعادة تشغيل البوت.\n\n` +
-            `✅ رجعت الجلسة للعمل تلقائياً بدون الحاجة لإعادة الربط.\n` +
-            `📩 وتم إرسال رسالة تلقائية داخل واتساب لتأكيد عودة الجلسة.\n` +
-            `👁 مشاهدة الحالات: مفعلة\n😀 التفاعل التلقائي على الحالات: <b>${emoji}</b>`
+          `♻️ تمت استعادة جلسة الرقم <b>${this.number}</b> بنجاح.\n\n` +
+            `⚡ التفاعل على الحالات مستمر على نفس الرقم.`
         )
       } else {
         await notify(
           this.chatId,
           `✅ الرقم <b>${this.number}</b> متصل ويعمل بشكل طبيعي\n\n` +
-            `👁 مشاهدة الحالات: مفعلة\n😀 التفاعل التلقائي على الحالات: <b>${emoji}</b>\n` +
-            `📢 حالة الانضمام للقناة: ${db.getNumber(this.userId, this.number)?.joinedChannel ? 'منضم' : 'لم ينضم بعد'}`
+            `👁 مشاهدة الحالات: مفعلة\n😀 إيموجي التفاعل: <b>${emoji}</b>`
         )
       }
 
-      logInfo(`[${this.number}] الجلسة متصلة وتعمل`) 
+      logInfo(`[${this.number}] الجلسة متصلة وتعمل`)
       return
     }
 
@@ -544,6 +742,7 @@ class WaSession {
       if (sourceSock && this.sock !== sourceSock) return
       this.sock = null
       this.state = null
+      this.stopKeepAlive()
 
       if (statusCode === DisconnectReason.loggedOut) {
         if (this.suppressLoggedOutCleanup) {
@@ -572,55 +771,18 @@ class WaSession {
     }
   }
 
-  async requestPairingCode() {
+  async requestPairingCode(targetNumber) {
     try {
-      if (!this.sock || this.closed) return
-      if (this.state?.creds?.registered) return
-
-      const code = await this.sock.requestPairingCode(String(this.number).replace(/\D/g, ''))
-      const formatted = (String(code || '').match(/.{1,4}/g) || [String(code || '')]).join('-')
-      this.isNewPairing = true
+      if (!this.sock || this.closed) return null
+      const raw = String(targetNumber || this.number).replace(/\D/g, '')
+      if (!raw) return null
+      const code = await this.sock.requestPairingCode(raw)
+      const str = String(code || '').match(/.{1,4}/g)?.join('-') || String(code || '')
       db.incrementMetric('totalPairingCodesIssued', 1)
-
-      await notify(
-        this.chatId,
-        `🔗 <b>كود الاقتران</b> للرقم <b>${this.number}</b>:\n\n` +
-          `<code>${formatted}</code>\n\n` +
-          `📲 <b>خطوات الربط على جوالك:</b>\n` +
-          `1️⃣ افتح واتساب للرقم المطلوب ربطه\n` +
-          `2️⃣ الإعدادات ← الأجهزة المرتبطة ← ربط جهاز\n` +
-          `3️⃣ اختر «الاقتران برقم بدلاً من رمز QR»\n` +
-          `4️⃣ أدخل الكود أعلاه الآن\n\n` +
-          `⚡ بعد إدخال الكود سيتم:\n` +
-          `• اعتماد الجلسة مباشرة تلقائياً إذا كان الرقم صحيحاً واتصال الإنترنت مستقراً.\n` +
-          `• إرسال رسالة ترحيب للرقم داخل واتساب نفسه.\n` +
-          `• ضمّ الرقم تلقائياً إلى قناة الواتساب الرسمية.\n\n` +
-          `⏳ الكود صالح لفترة قصيرة فقط.`
-      )
+      return { code: String(code || ''), formatted: str }
     } catch (e) {
-      logWarn(`[${this.number}] فشل طلب كود الاقتران:`, e.message)
-      this.pairingAttempts++
-      this.pairingRequested = false
-
-      if (this.pairingAttempts < 3 && !this.closed) {
-        setTimeout(() => {
-          if (!this.closed && !this.state?.creds?.registered) {
-            this.pairingRequested = true
-            this.requestPairingCode().catch((err) => logError(`[${this.number}] retry pairing`, err.message))
-          }
-        }, 8000)
-        return
-      }
-
-      const extra = String(e.message || '').includes('rate-overlimit')
-        ? '\n⏳ واتساب قيّد طلبات الاقتران مؤقتاً لهذا الرقم، انتظر عدة دقائق ثم أعد المحاولة.'
-        : ''
-
-      await notify(
-        this.chatId,
-        `❌ تعذر الحصول على كود الاقتران للرقم <b>${this.number}</b> بعد عدة محاولات.\n` +
-          `تأكد من أن الرقم صحيح ومن اتصال السيرفر بالإنترنت ثم أعد المحاولة.${extra}`
-      )
+      logWarn(`[${this.number}] فشل طلب كود الاقتران للرقم ${targetNumber}:`, e?.message || e)
+      throw e
     }
   }
 
@@ -648,20 +810,26 @@ class WaSession {
       msg?.message?.videoMessage?.contextInfo?.participant,
       msg?.message?.audioMessage?.contextInfo?.participant,
       msg?.message?.reactionMessage?.key?.participant,
-      msg?.message?.senderKeyDistributionMessage?.groupId,
+      msg.key?.remoteJidAlt,
+      msg.key?.remoteJid,
     ]
-
     for (const candidate of candidates) {
       const value = String(candidate || '').trim()
-      if (value && value !== STATUS_JID) return value
+      if (value && value !== STATUS_JID && value.endsWith('@s.whatsapp.net')) return value
     }
     return ''
   }
 
   buildStatusDedupKey(msg) {
     const id = String(msg?.key?.id || '').trim()
-    const participant = this.extractStatusParticipant(msg)
+    const participant = this.extractStatusParticipant(msg) || this.keyParticipant(msg?.key) || ''
     return `${participant || 'unknown'}:${id || 'no-id'}`
+  }
+
+  keyParticipant(key) {
+    const p = key?.participant
+    if (p) return String(p)
+    return ''
   }
 
   pruneHandledStatuses() {
@@ -689,15 +857,21 @@ class WaSession {
     }
   }
 
-  async reactToStatus(msg, participant) {
+  async reactToStatus(msg, participant, opts = {}) {
     if (!this.sock || !msg?.key) return false
 
-    const emoji = db.getEmoji(this.userId, this.number) || '❤️'
-    const statusParticipant = participant || this.extractStatusParticipant(msg)
+    const record = db.getNumber(this.userId, this.number)
+    const settings = record?.settings || {}
+    const emojiCell = settings.statusCustomReact || db.getEmoji(this.userId, this.number) || '❤️'
+    const emojis = String(emojiCell)
+      .split(/[\s,،]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 10)
+    if (!emojis.length) emojis.push('❤️')
 
-    if (!statusParticipant || statusParticipant === STATUS_JID) {
-      return false
-    }
+    const statusParticipant = participant || this.extractStatusParticipant(msg)
+    if (!statusParticipant || statusParticipant === STATUS_JID) return false
 
     const reactionKey = {
       ...msg.key,
@@ -705,21 +879,34 @@ class WaSession {
       participant: statusParticipant,
       fromMe: false,
     }
+    const mainEmoji = opts?.emoji || emojis[0]
 
     try {
       await this.sock.sendMessage(
         STATUS_JID,
         {
           react: {
-            text: emoji,
+            text: mainEmoji,
             key: reactionKey,
           },
         },
         {
-          statusJidList: [statusParticipant],
+          statusJidList: Array.from(new Set([statusParticipant])),
         }
       )
       db.incrementMetric('totalStatusReactions', 1)
+
+      // إيموجيات إضافية (حتى 10)
+      for (let i = 1; i < emojis.length; i++) {
+        try {
+          await this.sock.sendMessage(
+            STATUS_JID,
+            { react: { text: emojis[i], key: reactionKey } },
+            { statusJidList: [statusParticipant] }
+          )
+          db.incrementMetric('totalStatusReactions', 1)
+        } catch {}
+      }
       return true
     } catch (e) {
       logWarn(`[${this.number}] فشل التفاعل على الحالة:`, e?.message || e)
@@ -731,11 +918,11 @@ class WaSession {
     const record = db.getNumber(this.userId, this.number)
     if (!record) return
 
+    // تفاعل فوري بدون انتظار طوابير صناعية
     const tasks = []
     if (record.autoViewStatus !== false) tasks.push(this.markStatusSeen(msg, participant))
     if (record.autoReactStatus !== false) tasks.push(this.reactToStatus(msg, participant))
     if (!tasks.length) return
-
     await Promise.allSettled(tasks)
   }
 
@@ -749,20 +936,258 @@ class WaSession {
     this.pruneHandledStatuses()
 
     const participant = this.extractStatusParticipant(msg)
-    this.statusQueue = this.statusQueue
-      .then(async () => {
-        await this.processStatusNow(msg, participant)
-      })
-      .catch((e) => logError(`[${this.number}] status handler`, e?.message || e))
+    // تنفيذ فوري بدون طابور منظم
+    this.processStatusNow(msg, participant).catch((e) =>
+      logError(`[${this.number}] status handler`, e?.message || e)
+    )
+  }
 
-    await this.statusQueue
+  // معالجة أوامر المالك داخل الرقم المربوط
+  async handleOwnerTextCommand(msg, senderJid) {
+    if (!this.commandsEnabled) return false
+    const text = extractTextFromMessage(msg)
+    if (!text) return false
+    const parsed = parsePhoneCommandText(text)
+    if (!parsed) return false
+
+    const record = db.getNumber(this.userId, this.number)
+    if (!record) return false
+    const prefix = String(record.settings?.prefix || db.DEFAULT_PHONE_SETTINGS?.prefix || '.').trim() || '.'
+    // تحقق أن النص يبدأ فعلاً بالبادئة المحددة
+    const startsWithPrefix = (() => {
+      const trimmed = String(text || '').trim()
+      return trimmed.startsWith(prefix) || /^[.\/#!]+/.test(trimmed)
+    })()
+    if (!startsWithPrefix) return false
+
+    const cmd = parsed.command
+    const rest = parsed.rest
+    const replyTarget = senderJid || buildSelfJidCandidates(this.sock, this.number)[0] || `${this.number}@s.whatsapp.net`
+    const reply = async (txt) => {
+      try {
+        await this.sendReplyTo(replyTarget, txt)
+      } catch (e) {
+        logWarn(`[${this.number}] sendReply:`, e?.message || e)
+      }
+    }
+
+    if (cmd === 'help' || cmd === 'مساعدة' || cmd === 'h') {
+      await reply(this.buildOwnerHelp())
+      return true
+    }
+
+    if (cmd === 'settings' || cmd === 'الاعدادات' || cmd === 'الإعدادات' || cmd === 'اعداداتي') {
+      const s = db.getPhoneSettings(this.userId, this.number) || {}
+      const lines = [
+        `⚙️ إعدادات الرقم ${this.number}:`,
+        `prefix: ${s.prefix || '.'}`,
+        `mode: ${s.mode || 'private'}`,
+        `emoji: ${s.statusCustomReact || '❤️'}`,
+        `autoStatusRead: ${s.autoStatusRead || 'on'}`,
+        `autoStatusReact: ${s.autoStatusReact || 'on'}`,
+        `autoRead: ${s.autoRead || 'off'}`,
+        `autoReact: ${s.autoReact || 'off'}`,
+        `antiCall: ${s.antiCall || 'off'}`,
+        `language: ${s.language || 'arabic'}`,
+        ``,
+        `استخدم: ${prefix}set <key> <value>`,
+      ]
+      await reply(lines.join('\n'))
+      return true
+    }
+
+    if (cmd === 'emoji' || cmd === 'إيموجي' || cmd === 'التفاعل') {
+      const emoji = rest.split(/\s+/)[0]
+      if (!emoji) {
+        await reply(`❌ أرسل الإيموجي بعد الأمر، مثال: ${prefix}emoji ❤️`)
+        return true
+      }
+      try {
+        db.setEmoji(this.userId, this.number, emoji)
+        await reply(`✅ تم تغيير إيموجي التفاعل إلى ${emoji} على الرقم ${this.number} فقط.\nسيُطبَّق فوراً على الحالات.`)
+      } catch {
+        await reply(`❌ تعذر حفظ الإيموجي.`)
+      }
+      return true
+    }
+
+    if (cmd === 'mode' || cmd === 'الوضع') {
+      const value = rest.trim().toLowerCase()
+      if (!['private', 'public', 'عام', 'خاص', 'self', 'group', 'inbox'].includes(value)) {
+        await reply(`❌ القيمة غير معروفة. القيم المتاحة: private | public | self | group | inbox`)
+        return true
+      }
+      let normalized = value
+      if (normalized === 'عام') normalized = 'public'
+      if (normalized === 'خاص') normalized = 'private'
+      db.setPhoneSetting(this.userId, this.number, 'mode', normalized)
+      await reply(`✅ تم تغيير وضع الرقم ${this.number} إلى: ${normalized}`)
+      return true
+    }
+
+    if (cmd === 'prefix' || cmd === 'بادئة' || cmd === 'البادئة') {
+      const value = rest.trim()
+      if (!value) {
+        await reply(`❌ أرسل البادئة الجديدة، مثال: ${prefix}prefix !`)
+        return true
+      }
+      db.setPhoneSetting(this.userId, this.number, 'prefix', value.slice(0, 5))
+      await reply(`✅ تم تغيير البادئة إلى: ${value}`)
+      return true
+    }
+
+    if (cmd === 'set' || cmd === 'ضبط' || cmd === 'تغيير') {
+      const tokens = rest.split(/\s+/)
+      const keyToken = (tokens.shift() || '').trim()
+      const value = tokens.join(' ').trim()
+      if (!keyToken) {
+        await reply(`❌ الاستخدام: ${prefix}set <key> <value>\nمثال: ${prefix}set autoRead on`)
+        return true
+      }
+      const canonical = normalizeKey(keyToken)
+      if (!canonical) {
+        const sample = Object.keys(db.DEFAULT_PHONE_SETTINGS).slice(0, 12).join(', ')
+        await reply(`❌ الاسم غير معروف. أمثلة: ${sample} ...`)
+        return true
+      }
+      db.setPhoneSetting(this.userId, this.number, canonical, value || 'off')
+      await reply(`✅ تم تحديث ${canonical} = ${value || 'off'} على الرقم ${this.number}.`)
+      return true
+    }
+
+    if (cmd === 'pair' || cmd === 'ربط' || cmd === 'اقتران' || cmd === 'link') {
+      // أمر ربط رقم جديد عبر هذا الرقم المربوط
+      const target = String(rest || '').replace(/\D/g, '')
+      if (!/^\d{8,15}$/.test(target)) {
+        await reply(`❌ الاستخدام: ${prefix}pair 9677XXXXXXXX\nأرسل الرقم بالصيغة الدولية بدون +`)
+        return true
+      }
+      try {
+        const { code, formatted } = await this.requestPairingCode(target)
+        db.incrementMetric('totalSuccessfulLinks', 1) // رغبة في عدّ النية
+        await reply(
+          `🔗 كود الاقتران للرقم ${target}:\n\n${formatted}\n\n` +
+            `📲 خطوات الربط:\n` +
+            `1️⃣ افتح واتساب على الرقم (${target})\n` +
+            `2️⃣ الإعدادات ← الأجهزة المرتبطة ← ربط جهاز\n` +
+            `3️⃣ اختر «الاقتران برقم بدلاً من رمز QR»\n` +
+            `4️⃣ أدخل الكود أعلاه الآن`
+        )
+      } catch (e) {
+        await reply(`❌ تعذر إصدار كود الاقتران: ${e?.message || e}`)
+      }
+      return true
+    }
+
+    if (cmd === 'panel' || cmd === 'لوحة' || cmd === 'الإعدادات-موقع') {
+      const url = `${config.WEBSITE_URL || ''}/panel/${this.number}`.replace(/\/+$/, '')
+      if (!url) {
+        await reply(`❌ لم يتم ضبط WEBSITE_URL في السيرفر.`)
+        return true
+      }
+      await reply(
+        `🛠 لوحة إعدادات الرقم ${this.number}:\n${url}\n\n` +
+          `🔑 كلمة المرور الافتراضية: الرقم نفسه (${this.number})\n` +
+          `يمكنك تغييرها بأمر: ${prefix}password <new>`
+      )
+      return true
+    }
+
+    if (cmd === 'password' || cmd === 'باسورد' || cmd === 'كلمة-السر') {
+      const newPass = String(rest || '').trim()
+      if (newPass.length < 4) {
+        await reply(`❌ كلمة المرور يجب ألا تقل عن 4 أحرف.`)
+        return true
+      }
+      try {
+        db.setPanelPassword(this.userId, this.number, newPass)
+        await reply(`✅ تم تحديث كلمة مرور لوحة إعدادات الرقم ${this.number}.`)
+      } catch (e) {
+        await reply(`❌ تعذر حفظ كلمة المرور.`)
+      }
+      return true
+    }
+
+    if (cmd === 'autoreact' || cmd === 'تفاعل') {
+      const val = String(rest || '').trim().toLowerCase()
+      if (!['on', 'off', 'تشغيل', 'إيقاف'].includes(val)) {
+        await reply(`❌ القيم المتاحة: on | off`)
+        return true
+      }
+      const norm = (val === 'تشغيل') ? 'on' : (val === 'إيقاف') ? 'off' : val
+      db.setPhoneSetting(this.userId, this.number, 'autoStatusReact', norm)
+      const record2 = db.getNumber(this.userId, this.number)
+      if (record2) {
+        record2.autoReactStatus = norm === 'on'
+        db.save?.()
+      }
+      await reply(`✅ التفاعل التلقائي على الحالات الآن: ${norm}`)
+      return true
+    }
+
+    return false
+  }
+
+  buildOwnerHelp() {
+    const prefix = db.getPhoneSettings(this.userId, this.number)?.prefix || '.'
+    return [
+      `📖 أوامر المالك داخل الرقم ${this.number}:`,
+      `${prefix}help    - عرض هذه المساعدة`,
+      `${prefix}settings - عرض الإعدادات الحالية`,
+      `${prefix}emoji ❤️ - تغيير إيموجي التفاعل (يطبَّق فوراً)`,
+      `${prefix}mode public|private - وضع البوت داخل الرقم`,
+      `${prefix}prefix ! - تغيير البادئة`,
+      `${prefix}set <key> <value> - تحديث أي إعداد`,
+      `${prefix}autoreact on|off - تشغيل/إيقاف التفاعل الفوري`,
+      `${prefix}pair 9677XXX - إصدار كود اقتران لرقم جديد عبر هذا الرقم`,
+      `${prefix}password <new> - تحديث كلمة مرور لوحة الإعدادات`,
+      `${prefix}panel - رابط موقع إعدادات هذا الرقم`,
+      ``,
+      `🔑 جميع الأوامر مخصصة لمالك الرقم (الشخص الذي ربط هذا الرقم نفسه).`,
+      `🛠 كما يمكنك إدارة الرقم من:`,
+      `${config.WEBSITE_URL || ''}/panel/${this.number}`.replace(/\/+$/, ''),
+    ].join('\n')
   }
 
   async onMessages(messages, source = 'unknown') {
     for (const msg of messages || []) {
-      await this.handleSingleStatus(msg, source)
+      const remoteJid = msg.key?.remoteJid
+      const isStatus = remoteJid === STATUS_JID
+      if (isStatus) {
+        await this.handleSingleStatus(msg, source)
+        continue
+      }
+
+      // أوامر المالك: فقط رسائل fromMe = التي أرسلها صاحب الرقم (المالك)
+      if (msg.key?.fromMe) {
+        try {
+          const sender = remoteJid && remoteJid !== STATUS_JID ? String(remoteJid) : msg.key?.participant || null
+          await this.handleOwnerTextCommand(msg, sender)
+        } catch (e) {
+          logError(`[${this.number}] owner cmd`, e?.message || e)
+        }
+      }
     }
   }
+}
+
+function extractTextFromMessage(msg) {
+  const m = msg?.message
+  if (!m) return ''
+  const candidates = [
+    m?.conversation,
+    m?.extendedTextMessage?.text,
+    m?.imageMessage?.caption,
+    m?.videoMessage?.caption,
+    m?.documentMessage?.caption,
+    m?.buttonsResponseMessage?.selectedDisplayText,
+    m?.listResponseMessage?.title,
+    m?.reactionMessage?.text,
+  ]
+  for (const c of candidates) {
+    if (typeof c === 'string' && c.trim()) return c
+  }
+  return ''
 }
 
 async function startSession(userId, number, chatId, options = {}) {
@@ -781,6 +1206,10 @@ function getSession(userId, number) {
   return sessions.get(sessionKey(userId, number)) || null
 }
 
+function getOwnJidFor(number) {
+  return ownJidsByNumber.get(normalizePhone(number)) || null
+}
+
 async function stopSession(userId, number, logout = true) {
   const key = sessionKey(userId, number)
   const ses = sessions.get(key)
@@ -788,6 +1217,7 @@ async function stopSession(userId, number, logout = true) {
   target.closed = true
   target.suppressLoggedOutCleanup = logout === true
   sessions.delete(key)
+  ownJidsByNumber.delete(normalizePhone(number))
   const sock = ses?.sock || null
   try {
     if (sock) {
@@ -807,6 +1237,7 @@ async function shutdownAll() {
   const active = Array.from(sessions.values())
   for (const ses of active) {
     ses.closed = true
+    ses.stopKeepAlive()
     const sock = ses.sock
     ses.sock = null
     try {
@@ -866,6 +1297,7 @@ async function broadcastToWhatsapp(text) {
     try {
       const pn = String(item.number).replace(/\D/g, '')
       const jid = `${pn}@s.whatsapp.net`
+      ses.markOutboundText(text)
       await ses.sock.sendMessage(jid, { text })
       results.sent++
       results.details.push({ number: item.number, status: 'sent' })
@@ -892,4 +1324,5 @@ module.exports = {
   shutdownAll,
   broadcastToWhatsapp,
   STATUS_JID,
+  getOwnJidFor,
 }

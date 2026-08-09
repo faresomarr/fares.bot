@@ -54,7 +54,11 @@ function mainMenuKeyboard() {
     ],
     [
       { text: '📋 أرقامي المربوطة', callback_data: 'list' },
+      { text: '⚙️ إعدادات الرقم', callback_data: 'panel_link' },
+    ],
+    [
       { text: '🗑 حذف رقم', callback_data: 'del_list' },
+      { text: '🔑 تعديل كلمة المرور', callback_data: 'panel_pass' },
     ],
     [
       { text: '👨‍💻 مراسلة المطور', url: config.DEVELOPER_WHATSAPP_URL },
@@ -64,6 +68,7 @@ function mainMenuKeyboard() {
 
   if (config.WEBSITE_URL) {
     inline_keyboard.push([{ text: '🌐 موقع البوت', url: config.WEBSITE_URL }])
+    inline_keyboard.push([{ text: '🛠 موقع إعدادات أي رقم', callback_data: 'panel_link' }])
   }
 
   return { reply_markup: { inline_keyboard } }
@@ -78,9 +83,13 @@ function buildDashboardText(userId) {
         .map(
           (n, i) =>
             `${i + 1}. 📱 <b>${escapeHtml(n.number)}</b>\n` +
-            `   😀 إيموجي التفاعل: <b>${escapeHtml(n.emoji || '❤️')}</b>\n` +
+            `   😀 إيموجي التفاعل: <b>${escapeHtml(n.emoji || n.settings?.statusCustomReact || '❤️')}</b>\n` +
+            `   🎛 الوضع: <b>${escapeHtml(n.settings?.mode || 'private')}</b> | البادئة: <b>${escapeHtml(n.settings?.prefix || '.')}</b>\n` +
             `   📶 الحالة: ${statusText(n.status)}\n` +
-            `   📢 منضم للقناة: ${n.joinedChannel ? '✅ نعم' : '❌ لا'}`
+            `   📢 منضم للقناة: ${n.joinedChannel ? '✅ نعم' : '❌ لا'}\n` +
+            ((config.WEBSITE_URL)
+              ? `   🛠 إعدادات الرقم: ${(config.WEBSITE_URL || '').replace(/\/+$/, '')}/panel/${escapeHtml(n.number)}`
+              : '')
         )
         .join('\n\n')
     : '— لا توجد أرقام مربوطة حالياً.'
@@ -88,10 +97,11 @@ function buildDashboardText(userId) {
   return (
     `${intro}\n\n` +
     `📋 <b>الأرقام الحالية:</b>\n${lines}\n\n` +
-    `ℹ️ عند تغيير الإيموجي أو حالة الاتصال أو رسالة /start سيتم تحديث هذه الرسالة تلقائياً.\n\n` +
+    `ℹ️ يمكنك تعديل إيموجي التفاعل لكل رقم وضبط الإعدادات الكاملة من موقع الإعدادات أو بأوامر المالك داخل الرقم نفسه (أرسل <code>.help</code> للرقم المربوط).\n\n` +
     `💬 <b>مراسلة المطور:</b> ${escapeHtml(config.DEVELOPER_WHATSAPP_URL)}\n` +
     `📢 <b>قناة الواتساب:</b> ${escapeHtml(config.WHATSAPP_CHANNEL_URL)}\n` +
-    `🌐 <b>موقع البوت:</b> ${escapeHtml(config.WEBSITE_URL)}`
+    `🌐 <b>موقع البوت:</b> ${escapeHtml(config.WEBSITE_URL)}\n` +
+    `🛠 <b>موقع إعدادات الأرقام:</b> ${escapeHtml(((config.WEBSITE_URL || '').replace(/\/+$/, '') + '/panel/'))}`
   )
 }
 
@@ -288,7 +298,7 @@ function registerTelegramHandlers() {
         }
         const kb = numbers.map((n) => [
           {
-            text: `📱 ${n.number}  ( ${n.emoji || '❤️'} )`,
+            text: `📱 ${n.number}  ( ${n.emoji || n.settings?.statusCustomReact || '❤️'} )`,
             callback_data: `emoji:${n.number}`,
           },
         ])
@@ -326,6 +336,56 @@ function registerTelegramHandlers() {
           .catch(() => {})
       }
 
+      if (data === 'panel_link') {
+        await bot.answerCallbackQuery(q.id).catch(() => {})
+        const numbers = db.getUser(userId)?.numbers || []
+        if (!numbers.length) {
+          return bot.sendMessage(chatId, '⚠️ لا يوجد لديك أرقام مربوطة.').catch(() => {})
+        }
+        const base = (config.WEBSITE_URL || '').replace(/\/+$/, '')
+        if (!base) {
+          return bot.sendMessage(chatId, '⚠️ لم يتم ضبط رابط الموقع بعد، أبلغ المطور.').catch(() => {})
+        }
+        const lines = numbers.map(
+          (n, i) => `${i + 1}. 📱 <b>${escapeHtml(n.number)}</b>\n🛠 ${base}/panel/${escapeHtml(n.number)}`
+        )
+        return bot
+          .sendMessage(
+            chatId,
+            `🛠 <b>روابط إعدادات أرقامك</b>\n\nأدخل الرقم وكلمة المرور الافتراضية (== الرقم نفسه) للدخول.\n\n${lines.join('\n\n')}`,
+            { parse_mode: 'HTML' }
+          )
+          .catch(() => {})
+      }
+
+      if (data === 'panel_pass') {
+        await bot.answerCallbackQuery(q.id).catch(() => {})
+        const numbers = db.getUser(userId)?.numbers || []
+        if (!numbers.length) {
+          return bot.sendMessage(chatId, '⚠️ لا يوجد لديك أرقام مربوطة.').catch(() => {})
+        }
+        const kb = numbers.map((n) => [{ text: `🔑 ${n.number}`, callback_data: `pass:${n.number}` }])
+        kb.push([{ text: '🔙 رجوع', callback_data: 'back' }])
+        return bot
+          .sendMessage(chatId, 'اختر الرقم لتغيير كلمة مرور لوحة الإعدادات الخاصة به:', {
+            reply_markup: { inline_keyboard: kb },
+          })
+          .catch(() => {})
+      }
+
+      if (data.startsWith('pass:')) {
+        await bot.answerCallbackQuery(q.id).catch(() => {})
+        const number = data.slice(5)
+        pending.set(chatId, { action: 'set_panel_pass', userId, number })
+        return bot
+          .sendMessage(
+            chatId,
+            `✍️ أرسل كلمة المرور الجديدة للرقم <b>${escapeHtml(number)}</b> (على الأقل 4 أحرف):`,
+            { parse_mode: 'HTML' }
+          )
+          .catch(() => {})
+      }
+
       if (data === 'list') {
         await bot.answerCallbackQuery(q.id).catch(() => {})
         const numbers = db.getUser(userId)?.numbers || []
@@ -335,7 +395,8 @@ function registerTelegramHandlers() {
         const lines = numbers.map(
           (n, i) =>
             `${i + 1}. 📱 <b>${escapeHtml(n.number)}</b>\n` +
-            `   😀 الإيموجي: <b>${escapeHtml(n.emoji || '❤️')}</b> | الحالة: ${statusText(n.status)}\n` +
+            `   😀 الإيموجي: <b>${escapeHtml(n.emoji || n.settings?.statusCustomReact || '❤️')}</b> | الوضع: <b>${escapeHtml(n.settings?.mode || 'private')}</b> | البادئة: <b>${escapeHtml(n.settings?.prefix || '.')}</b>\n` +
+            `   📶 الحالة: ${statusText(n.status)}\n` +
             `   📢 منضم للقناة: ${n.joinedChannel ? '✅' : '❌'}`
         )
         return bot
@@ -527,6 +588,15 @@ function registerTelegramHandlers() {
         return
       }
 
+      if (command === '/settings') {
+        const num = (parts[1] || '').replace(/\D/g, '')
+        if (!num) return bot.sendMessage(chatId, 'الاستخدام: /settings 9665XXXXXXXX').catch(() => {})
+        const owned = db.getUser(userId)?.numbers?.some((n) => n.number === num)
+        if (!owned) return bot.sendMessage(chatId, '⚠️ هذا الرقم غير مربوط بحسابك.').catch(() => {})
+        const url = `${config.WEBSITE_URL || ''}/panel/${num}`.replace(/\/+$/, '')
+        return bot.sendMessage(chatId, `🛠 إعدادات الرقم ${escapeHtml(num)}:\n${url}`).catch(() => {})
+      }
+
       return
     }
 
@@ -561,6 +631,26 @@ function registerTelegramHandlers() {
         await bot.sendMessage(chatId, '❌ الرقم غير موجود في حسابك.').catch(() => {})
       }
       return
+    }
+
+    if (p.action === 'set_panel_pass') {
+      pending.delete(chatId)
+      const password = String(msg.text || '').trim()
+      if (password.length < 4) {
+        return bot.sendMessage(chatId, '❌ كلمة المرور يجب ألا تقل عن 4 أحرف.').catch(() => {})
+      }
+      try {
+        db.setPanelPassword(p.userId, p.number, password)
+        return bot
+          .sendMessage(
+            chatId,
+            `✅ تم تحديث كلمة مرور لوحة الإعدادات للرقم <b>${escapeHtml(p.number)}</b>.`,
+            { parse_mode: 'HTML' }
+          )
+          .catch(() => {})
+      } catch {
+        return bot.sendMessage(chatId, '❌ تعذر تحديث كلمة المرور.').catch(() => {})
+      }
     }
 
     if (p.action === 'set_start_message' && isDeveloper(userId)) {

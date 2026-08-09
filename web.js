@@ -2,6 +2,7 @@ const express = require('express')
 const path = require('path')
 const config = require('./config')
 const db = require('./db')
+const whatsapp = require('./whatsapp')
 
 function formatApiComment(comment) {
   return {
@@ -30,6 +31,10 @@ function createAdminMiddleware() {
     }
     next()
   }
+}
+
+function escape(s) {
+  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
 function startWebServer({ getRuntimeStats }) {
@@ -125,6 +130,128 @@ function startWebServer({ getRuntimeStats }) {
     res.sendFile(path.join(publicDir, 'admin.html'))
   })
 
+  // ====================== لوحة إعدادات الرقم المربوط ======================
+
+  app.get('/api/panel/:number/default-password', (req, res) => {
+    const num = String(req.params.number || '').replace(/\D/g, '')
+    if (!num) return res.status(400).json({ ok: false, error: 'رقم غير صالح.' })
+    const record = db.getAllNumbers().find((n) => n.number === num)
+    if (!record) return res.status(404).json({ ok: false, error: 'الرقم غير مربوط على هذا البوت.' })
+    res.json({ ok: true, defaultPassword: db.getDefaultPanelPasswordFor(num), hasCustomPassword: Boolean(record.panelPasswordHash) })
+  })
+
+  app.post('/api/panel/login', (req, res) => {
+    try {
+      const number = String(req.body?.number || '').replace(/\D/g, '')
+      const password = String(req.body?.password || '').trim()
+      if (!number || !password) {
+        return res.status(400).json({ ok: false, error: 'الرقم وكلمة المرور مطلوبان.' })
+      }
+      const owner = db.numberOwner(number)
+      if (!owner) return res.status(404).json({ ok: false, error: 'الرقم غير مربوط.' })
+      const record = db.getNumber(owner, number)
+      if (!record) return res.status(404).json({ ok: false, error: 'الرقم غير موجود.' })
+
+      const ok = record.panelPasswordHash
+        ? db.verifyPanelPassword(record.panelPasswordHash, password)
+        : password === db.getDefaultPanelPasswordFor(number)
+      if (!ok) return res.status(401).json({ ok: false, error: 'كلمة المرور غير صحيحة.' })
+
+      const token = db.createPanelSession(owner, number)
+      res.cookie?.(`panel_${number}`, token, { httpOnly: false, sameSite: 'lax' })
+      res.json({ ok: true, token, userId: owner, number, settings: db.getPhoneSettings(owner, number), status: record.status })
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message || 'خطأ غير متوقع.' })
+    }
+  })
+
+  app.post('/api/panel/logout', (req, res) => {
+    const token = String(req.body?.token || req.headers['x-panel-token'] || '').trim()
+    db.destroyPanelSession(token)
+    res.json({ ok: true })
+  })
+
+  function requirePanelSession(req, res, next) {
+    const number = String(req.params.number || '').replace(/\D/g, '')
+    const token = String(req.body?.token || req.headers['x-panel-token'] || req.query?.token || '').trim()
+    const sess = db.getPanelSession(token)
+    if (!sess || sess.number !== number) {
+      return res.status(401).json({ ok: false, error: 'انتهت الجلسة. سجّل الدخول مجدداً.' })
+    }
+    req.panelSession = sess
+    next()
+  }
+
+  app.get('/api/panel/:number/settings', requirePanelSession, (req, res) => {
+    const sess = req.panelSession
+    const settings = db.getPhoneSettings(sess.userId, sess.number)
+    const record = db.getNumber(sess.userId, sess.number)
+    res.json({
+      ok: true,
+      number: sess.number,
+      userId: sess.userId,
+      status: record?.status || 'unknown',
+      emoji: record?.emoji || settings.statusCustomReact,
+      settings,
+      defaults: db.getDefaultPhoneSettings(),
+    })
+  })
+
+  app.post('/api/panel/:number/settings', requirePanelSession, (req, res) => {
+    try {
+      const sess = req.panelSession
+      const patch = (req.body?.settings && typeof req.body.settings === 'object') ? req.body.settings : (req.body || {})
+      delete patch.token
+      const next = db.setPhoneSettings(sess.userId, sess.number, patch)
+      res.json({ ok: true, settings: next })
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message || 'تعذر الحفظ.' })
+    }
+  })
+
+  app.post('/api/panel/:number/password', requirePanelSession, (req, res) => {
+    try {
+      const sess = req.panelSession
+      const current = String(req.body?.currentPassword || '').trim()
+      const next = String(req.body?.newPassword || '').trim()
+      if (!current || !next || next.length < 4) {
+        return res.status(400).json({ ok: false, error: 'كلمة المرور الحالية والجديدة (4 أحرف على الأقل) مطلوبة.' })
+      }
+      const record = db.getNumber(sess.userId, sess.number)
+      const ok = record.panelPasswordHash
+        ? db.verifyPanelPassword(record.panelPasswordHash, current)
+        : current === db.getDefaultPanelPasswordFor(sess.number)
+      if (!ok) return res.status(401).json({ ok: false, error: 'كلمة المرور الحالية غير صحيحة.' })
+      db.setPanelPassword(sess.userId, sess.number, next)
+      res.json({ ok: true })
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message || 'تعذر تحديث كلمة المرور.' })
+    }
+  })
+
+  app.post('/api/panel/:number/pair', requirePanelSession, async (req, res) => {
+    try {
+      const sess = req.panelSession
+      const target = String(req.body?.number || '').replace(/\D/g, '')
+      if (!/^\d{8,15}$/.test(target)) {
+        return res.status(400).json({ ok: false, error: 'صيغة الرقم الهدف غير صحيحة.' })
+      }
+      const ses = whatsapp.getSession(sess.userId, sess.number)
+      if (!ses || !ses.sock) {
+        return res.status(400).json({ ok: false, error: 'لا توجد جلسة نشطة لهذا الرقم.' })
+      }
+      const { formatted } = await ses.requestPairingCode(target)
+      db.incrementMetric('totalPairingCodesIssued', 1)
+      res.json({ ok: true, code: formatted })
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'تعذر إصدار كود الاقتران.' })
+    }
+  })
+
+  app.get('/panel/:number', (req, res) => {
+    res.sendFile(path.join(publicDir, 'panel.html'))
+  })
+
   app.use((req, res) => {
     res.sendFile(path.join(publicDir, 'index.html'))
   })
@@ -136,6 +263,8 @@ function startWebServer({ getRuntimeStats }) {
 
   return { app, server }
 }
+
+function _unused(e) { return escape(e) }
 
 module.exports = {
   startWebServer,
