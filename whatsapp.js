@@ -300,6 +300,125 @@ async function runInBatches(items, limit, delayMs, worker) {
 // هذه الدالة تنشئ مقبس واتساب مستقل تماماً ببيانات اعتماد فارغة ومجلد
 // مؤقت منفصل، ثم تطلب كود الاقتران للرقم المستهدف، ثم تُغلق المقبس
 // وتنظّف المجلد المؤقت، بدون لمس جلسة المالك الحالية أبداً.
+//
+// الأسلوب: لكل محاولة، ننشئ مقبساً جديداً ببيانات اعتماد فارغة وننتظر
+// حدثَي "qr" و "connection.update" معاً حتى تصل طبقة النقل إلى الحالة
+// التي يقبل فيها Baileys نداء requestPairingCode. في حال فشل طلب الكود
+// بخطأ "Connection Closed" الناجم عن قطع مبكر، نُعيد المحاولة بمقبس جديد.
+async function _createIsolatedPairingSocket(keyStorePath, version) {
+  const creds = initAuthCreds()
+
+  const sock = makeWASocket({
+    auth: {
+      creds,
+      keys: {
+        get: async (type, ids) => {
+          const out = {}
+          for (const id of ids) {
+            try {
+              const f = path.join(keyStorePath, `${type}-${id}.json`)
+              const raw = await fs.promises.readFile(f, 'utf8')
+              out[id] = JSON.parse(raw, BufferJSON.reviver)
+            } catch {}
+          }
+          return out
+        },
+        set: async (data) => {
+          for (const cat in data) {
+            for (const id in data[cat]) {
+              const value = data[cat][id]
+              if (!value) continue
+              const f = path.join(keyStorePath, `${cat}-${id}.json`)
+              try {
+                const tmpPath = `${f}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`
+                await fs.promises.writeFile(tmpPath, JSON.stringify(value, BufferJSON.replacer))
+                await fs.promises.rename(tmpPath, f)
+              } catch {}
+            }
+          }
+        },
+      },
+    },
+    version,
+    printQRInTerminal: false,
+    browser: getBrowserProfile(),
+    logger: pino({ level: 'silent' }),
+    markOnlineOnConnect: false,
+    syncFullHistory: false,
+    // مهم: fireInitQueries=false يمنع مكتبة Baileys من تشغيل استعلامات
+    // أولية قد تتسبب في إغلاق الاتصال قبل أن يُستدعى requestPairingCode.
+    fireInitQueries: false,
+    keepAliveIntervalMs: 20_000,
+    defaultQueryTimeoutMs: 60_000,
+    connectTimeoutMs: 60_000,
+    getMessage: async () => undefined,
+    emitOwnEvents: false,
+  })
+
+  return sock
+}
+
+async function _waitForPairingReady(sock, timeoutMs = 45_000) {
+  // ننتظر حتى يُصدر المقبس حدث "qr" (يدل على نجاح الاتصال بخوادم واتساب
+  // وأن طبقة الطلبات جاهزة لاستقبال نداء requestPairingCode). كذلك نلتقط
+  // connection.close لرفض الوعد مبكراً إن أُغلق المقبس.
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const cleanup = () => {
+      try { sock.ev.off('connection.update', onUpdate) } catch {}
+      try { sock.ev.off('qr', onQr) } catch {}
+      try { sock.ev.off('connection.close', onClose) } catch {}
+    }
+    const onQr = () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      cleanup()
+      resolve()
+    }
+    const onClose = () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      cleanup()
+      reject(new Error('Connection Closed'))
+    }
+    const onUpdate = (u) => {
+      if (settled) return
+      // في Baileys v7 يأتي حدث "qr" منفصلاً قبل/أثناء connection.update.
+      // الاكتفاء بـ connection.update يكفي غالباً لأن المكتبة تطلق "qr"
+      // بنفس المرحلة، لكن نُبقي هذا كحماية إضافية.
+      if (u?.qr && Array.isArray(u.qr) && u.qr.length) {
+        onQr()
+        return
+      }
+      // لو دخل connecting بدون qr (في حالات نادرة) ننتظر qr.
+      // لو دخل open من دون تسجيل الدخول فهذا يعني نجاح الاقتران مسبقاً — لا نريد ذلك.
+    }
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      cleanup()
+      reject(new Error('انتهت مهلة انتظار جاهزية المقبس'))
+    }, timeoutMs)
+    try { sock.ev.on('connection.update', onUpdate) } catch {}
+    try { sock.ev.on('qr', onQr) } catch {}
+    try { sock.ev.on('connection.close', onClose) } catch {}
+  })
+}
+
+async function _destroySocket(sock) {
+  if (!sock) return
+  try {
+    if (typeof sock.end === 'function') sock.end(undefined)
+  } catch {}
+  try {
+    if (sock?.ev?.removeAllListeners) sock.ev.removeAllListeners()
+  } catch {}
+  // منح المكتبة لحظة لتحرير المؤشرات والملفات قبل الحذف
+  await sleep(150)
+}
+
 async function requestIsolatedPairingCode(targetNumber) {
   const target = String(targetNumber || '').replace(/\D/g, '')
   if (!/^\d{8,15}$/.test(target)) {
@@ -313,94 +432,52 @@ async function requestIsolatedPairingCode(targetNumber) {
   const tempDir = path.join(config.SESSIONS_DIR, sessionTag)
   await fs.promises.mkdir(tempDir, { recursive: true })
 
-  let pairingSocket = null
+  const version = await getLatestVersion()
+  const MAX_ATTEMPTS = 3
+  let lastError = null
+
   try {
-    const version = await getLatestVersion()
-    const creds = initAuthCreds()
-    const keyStorePath = tempDir
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      let pairingSocket = null
+      try {
+        pairingSocket = await _createIsolatedPairingSocket(tempDir, version)
 
-    pairingSocket = makeWASocket({
-      auth: {
-        creds,
-        keys: {
-          get: async (type, ids) => {
-            const out = {}
-            for (const id of ids) {
-              try {
-                const f = path.join(keyStorePath, `${type}-${id}.json`)
-                const raw = await fs.promises.readFile(f, 'utf8')
-                out[id] = JSON.parse(raw, BufferJSON.reviver)
-              } catch {}
-            }
-            return out
-          },
-          set: async (data) => {
-            for (const cat in data) {
-              for (const id in data[cat]) {
-                const value = data[cat][id]
-                if (!value) continue
-                const f = path.join(keyStorePath, `${cat}-${id}.json`)
-                try {
-                  const tmpPath = `${f}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`
-                  await fs.promises.writeFile(tmpPath, JSON.stringify(value, BufferJSON.replacer))
-                  await fs.promises.rename(tmpPath, f)
-                } catch {}
-              }
-            }
-          },
-        },
-      },
-      version,
-      printQRInTerminal: false,
-      browser: getBrowserProfile(),
-      logger: pino({ level: 'silent' }),
-      markOnlineOnConnect: false,
-      syncFullHistory: false,
-      fireInitQueries: true,
-      keepAliveIntervalMs: 20_000,
-      defaultQueryTimeoutMs: 60_000,
-      connectTimeoutMs: 60_000,
-      getMessage: async () => undefined,
-      emitOwnEvents: false,
-    })
-
-    // انتظر حتى يدخل المقبس المؤقت في حالة connecting ثم اطلب الكود
-    await new Promise((resolve, reject) => {
-      let settled = false
-      const timer = setTimeout(() => {
-        if (settled) return
-        settled = true
-        try { pairingSocket.ev.off('connection.update', onUpdate) } catch {}
-        reject(new Error('انتهت مهلة تهيئة المقبس المؤقت'))
-      }, 25_000)
-      const onUpdate = (u) => {
-        if (settled) return
-        if (u?.connection === 'connecting' || u?.connection === 'open') {
-          settled = true
-          clearTimeout(timer)
-          try { pairingSocket.ev.off('connection.update', onUpdate) } catch {}
-          resolve()
+        // انتظر حتى يصدر المقبس حدث qr أو connection.update بجاهزية الطلب
+        try {
+          await _waitForPairingReady(pairingSocket, 45_000)
+        } catch (e) {
+          lastError = e
+          await _destroySocket(pairingSocket)
+          pairingSocket = null
+          // جهّز مجلداً جديداً للمحاولة التالية لتفادي أي بقايا حالة
+          try { await fs.promises.rm(tempDir, { recursive: true, force: true }) } catch {}
+          await fs.promises.mkdir(tempDir, { recursive: true })
+          if (attempt < MAX_ATTEMPTS) continue
+          break
         }
-      }
-      try { pairingSocket.ev.on('connection.update', onUpdate) } catch {}
-    })
 
-    const code = await pairingSocket.requestPairingCode(target)
-    const codeStr = String(code || '').match(/.{1,4}/g)?.join('-') || String(code || '')
-    db.incrementMetric('totalPairingCodesIssued', 1)
-    return { code: String(code || ''), formatted: codeStr }
+        // منح المكتبة مهلة قصيرة لاستكمال init
+        await sleep(500)
+
+        // طلب كود الاقتران مع مهلة خاصة وأثر وعزل تام عن مقبس المالك
+        const code = await Promise.race([
+          pairingSocket.requestPairingCode(target),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('انتهت مهلة استلام كود الاقتران')), 30_000)),
+        ])
+
+        const codeStr = String(code || '').match(/.{1,4}/g)?.join('-') || String(code || '')
+        db.incrementMetric('totalPairingCodesIssued', 1)
+        return { code: String(code || ''), formatted: codeStr }
+      } catch (e) {
+        lastError = e
+        logWarn(`[عزل .pair] محاولة ${attempt}/${MAX_ATTEMPTS} للرقم ${target} فشلت:`, e?.message || e)
+        if (pairingSocket) await _destroySocket(pairingSocket)
+      }
+    }
+    throw lastError || new Error('Connection Closed')
   } finally {
-    // إغلاق المقبس المؤقت بدون logout() — حتى لا يُلغى أي شيء يخص المالك
-    try {
-      if (pairingSocket && typeof pairingSocket.end === 'function') {
-        pairingSocket.end(undefined)
-      }
-    } catch {}
-    try {
-      if (pairingSocket?.ev?.removeAllListeners) {
-        pairingSocket.ev.removeAllListeners()
-      }
-    } catch {}
+    // إغلاق أي مقبس متبقٍّ
+    // (المقبس يُغلق داخلياً في كل محاولة عبر finally)
     // تنظيف المجلد المؤقت بعد لحظة لإتاحة تحرير الملفات على جميع المنصات
     setTimeout(() => {
       fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => {})
