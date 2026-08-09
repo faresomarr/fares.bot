@@ -69,7 +69,13 @@ npm start
 - `MEDIA_DOWNLOAD_DIR` مجلد تنزيلات تيك توك / إنستغرام المؤقتة.
 - `MEDIA_MAX_SIZE_MB` الحد الأعلى لحجم الفيديو المسموح إرساله.
 - `MEDIA_DOWNLOAD_TIMEOUT_MS` مهلة تنزيل الفيديو قبل الإلغاء.
+- `MEDIA_REQUEST_TIMEOUT_MS` مهلة طلبات الجلب الخفيفة (HTML / API / فحص الروابط).
+- `MEDIA_FETCH_CACHE_TTL_MS` مدة كاش نتائج تجهيز الروابط لتقليل الضغط على الخادم.
+- `MEDIA_WARMUP_INTERVAL_MS` مدة إعادة تسخين مصدر تيك توك لتقليل فشل الطلبات.
 - `YT_DLP_BINARY_PATH` مسار yt-dlp إذا كان مثبتاً مسبقاً على الخادم (اختياري).
+- `TIKTOK_SOURCE_PREFIX` و `TIKTOK_SOURCE_SITE` و `TIKTOK_SOURCE_API` إعدادات مصدر TikTokIO لاستخراج روابط تيك توك المباشرة.
+- `INSTAGRAM_SESSIONID` أو `INSTAGRAM_COOKIES` أو `INSTAGRAM_COOKIES_FILE` لتحسين دعم بعض روابط إنستغرام العامة التي تتشدد أحياناً.
+- `INSTAGRAM_APP_ID` قيمة رأس طلب إنستغرام المستخدمة أثناء الجلب.
 - `WEBSITE_URL` رابط موقعك النهائي بعد النشر.
 - `SITE_ADMIN_TOKEN` رمز الدخول إلى لوحة المطور بالموقع.
 - `DEVELOPER_WHATSAPP` رقم المطور.
@@ -97,3 +103,4 @@ npm start
 - عند استخدام أعداد كبيرة من الأرقام، اترك `LOG_LEVEL=warn` أو `error`.
 - عند تشغيل المشروع ستعمل واجهة الويب والبوت من نفس التطبيق.
 - أول عملية تحميل فيديو قد تستغرق وقتاً إضافياً بسيطاً إذا احتاج الخادم لتنزيل ملف `yt-dlp` التنفيذي تلقائياً.
+- تم تحسين التحميل بحيث يحاول أولاً استخراج رابط مباشر لفيديو TikTok عبر TikTokIO، ولإنستغرام عبر الصفحة نفسها أو واجهة embed/json أو ddinstagram، ثم يعود تلقائياً إلى `yt-dlp` كخطة احتياطية.

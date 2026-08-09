@@ -64,7 +64,19 @@ module.exports = {
   MEDIA_DOWNLOAD_DIR: String(process.env.MEDIA_DOWNLOAD_DIR || './tmp-downloads').trim() || './tmp-downloads',
   MEDIA_MAX_SIZE_MB: Math.max(5, parseNumber(process.env.MEDIA_MAX_SIZE_MB, 64)),
   MEDIA_DOWNLOAD_TIMEOUT_MS: Math.max(30000, parseNumber(process.env.MEDIA_DOWNLOAD_TIMEOUT_MS, 180000)),
+  MEDIA_REQUEST_TIMEOUT_MS: Math.max(10000, parseNumber(process.env.MEDIA_REQUEST_TIMEOUT_MS, 25000)),
+  MEDIA_FETCH_CACHE_TTL_MS: Math.max(60000, parseNumber(process.env.MEDIA_FETCH_CACHE_TTL_MS, 900000)),
+  MEDIA_WARMUP_INTERVAL_MS: Math.max(60000, parseNumber(process.env.MEDIA_WARMUP_INTERVAL_MS, 900000)),
   YT_DLP_BINARY_PATH: String(process.env.YT_DLP_BINARY_PATH || '').trim(),
+  TIKTOK_SOURCE_PREFIX: String(process.env.TIKTOK_SOURCE_PREFIX || 'tiktokio.com').trim() || 'tiktokio.com',
+  TIKTOK_SOURCE_SITE: String(process.env.TIKTOK_SOURCE_SITE || 'https://tiktokio.com/').trim() || 'https://tiktokio.com/',
+  TIKTOK_SOURCE_API:
+    String(process.env.TIKTOK_SOURCE_API || 'https://tiktokio.com/api/v1/tk/html').trim() ||
+    'https://tiktokio.com/api/v1/tk/html',
+  INSTAGRAM_SESSIONID: String(process.env.INSTAGRAM_SESSIONID || '').trim(),
+  INSTAGRAM_COOKIES: String(process.env.INSTAGRAM_COOKIES || '').trim(),
+  INSTAGRAM_COOKIES_FILE: String(process.env.INSTAGRAM_COOKIES_FILE || '').trim(),
+  INSTAGRAM_APP_ID: String(process.env.INSTAGRAM_APP_ID || '936619743392459').trim() || '936619743392459',
 
   PORT: port,
   WEBSITE_URL: websiteUrl,
