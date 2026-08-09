@@ -308,27 +308,29 @@
     }
 
     const wrap = qs('statusReactionsList')
-    if (!reactions.logs || !reactions.logs.length) {
-      wrap.className = 'reaction-log empty-state'
-      wrap.textContent = 'لا توجد تفاعلات حالات مسجلة بعد.'
-      return
-    }
+    const logs = reactions.logs || []
+    const uniqueNumbers = new Set(
+      logs
+        .map((item) => item.participantNumber || item.participantLabel)
+        .filter(Boolean)
+    )
 
-    wrap.className = 'reaction-log'
-    wrap.innerHTML = reactions.logs
-      .map(
-        (item) => `
-        <article class="reaction-item">
-          <div class="reaction-item-emoji">${escapeHtml(item.emoji)}</div>
-          <div class="reaction-item-body">
-            <strong>تم التفاعل على حالة ${escapeHtml(item.participantLabel || item.participantNumber || 'غير معروف')}</strong>
-            <small>وقت التنفيذ: ${escapeHtml(formatDate(item.reactedAt))}</small>
-          </div>
-          <span class="reaction-item-status">${escapeHtml(item.source || 'auto')}</span>
-        </article>
-      `
-      )
-      .join('')
+    wrap.className = 'reaction-count-card'
+    wrap.innerHTML = `
+      <div class="reaction-count-glow"></div>
+      <div class="reaction-count-ring">
+        <span class="reaction-count-num" data-target="${formatNumber(uniqueNumbers.size)}">${formatNumber(uniqueNumbers.size)}</span>
+        <span class="reaction-count-label">رقم</span>
+      </div>
+      <div class="reaction-count-info">
+        <span class="reaction-count-eyebrow">عدد الأرقام التي تفاعل معها الرقم المربوط</span>
+        <strong class="reaction-count-title">إجمالي التفاعلات: ${formatNumber(reactions.total || logs.length)}</strong>
+        <small class="reaction-count-sub">آخر تحديث: ${escapeHtml(formatDate((logs[0] && logs[0].reactedAt) || new Date().toISOString()))}</small>
+      </div>
+      <div class="reaction-count-orbit">
+        <span></span><span></span><span></span>
+      </div>
+    `
   }
 
   async function loadSettings() {
@@ -522,7 +524,39 @@
     showLogin()
   }
 
-  function installAutoRefresh() {
+  // دورة ألوان حيّة لبطاقة عدّاد الأرقام (تتغير كل ثانية بلوحة جديدة)
+  const COUNT_PALETTES = [
+    { p: '#22d3ee', p2: '#818cf8', a: '#06b6d4', glow: 'rgba(34, 211, 238, 0.55)' },
+    { p: '#a78bfa', p2: '#f472b6', a: '#a78bfa', glow: 'rgba(167, 139, 250, 0.55)' },
+    { p: '#f472b6', p2: '#fb7185', a: '#f472b6', glow: 'rgba(244, 114, 182, 0.55)' },
+    { p: '#fbbf24', p2: '#f97316', a: '#fbbf24', glow: 'rgba(251, 191, 36, 0.55)' },
+    { p: '#34d399', p2: '#06b6d4', a: '#34d399', glow: 'rgba(52, 211, 153, 0.55)' },
+    { p: '#60a5fa', p2: '#a78bfa', a: '#60a5fa', glow: 'rgba(96, 165, 250, 0.55)' },
+  ]
+  let countPaletteIndex = 0
+  let countColorTimer = null
+  function startCountColorCycle() {
+    function apply() {
+      const pal = COUNT_PALETTES[countPaletteIndex]
+      document.documentElement.style.setProperty('--c-primary', pal.p)
+      document.documentElement.style.setProperty('--c-primary-2', pal.p2)
+      document.documentElement.style.setProperty('--c-glow', pal.glow)
+      const card = qs('statusReactionsList')
+      if (card) {
+        card.style.setProperty('--count-glow', pal.glow)
+        card.style.setProperty('--count-stroke', pal.p)
+        card.style.setProperty('--count-accent', pal.p)
+        card.style.setProperty('--grad-count', `linear-gradient(135deg, ${pal.p}, ${pal.p2})`)
+        card.style.setProperty('--grad-count-text', `linear-gradient(135deg, ${pal.p}, ${pal.p2})`)
+      }
+    }
+    apply()
+    if (countColorTimer) clearInterval(countColorTimer)
+    countColorTimer = setInterval(() => {
+      countPaletteIndex = (countPaletteIndex + 1) % COUNT_PALETTES.length
+      apply()
+    }, 1000)
+  }
     if (STATE.refreshTimer) clearInterval(STATE.refreshTimer)
     STATE.refreshTimer = setInterval(() => {
       if (!STATE.number || !STATE.token) return
@@ -562,6 +596,7 @@
     }
 
     installAutoRefresh()
+    startCountColorCycle()
   }
 
   init().catch((e) => console.error('panel init error', e))

@@ -454,6 +454,138 @@ img { max-width: 100%; display: block; }
 .reaction-item-body small { color: var(--muted); }
 .reaction-item-status { font-size: 0.85rem; color: #bbf7d0; background: rgba(37,211,102,0.12); padding: 6px 10px; border-radius: 999px; border: 1px solid rgba(37,211,102,0.22); }
 
+/* بطاقة عدّاد الأرقام الحيّ (بدال السجل الأفقي) */
+.reaction-count-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  padding: 30px 28px;
+  border-radius: 24px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  overflow: hidden;
+  isolation: isolate;
+  min-height: 150px;
+}
+.reaction-count-card.empty-state { color: var(--muted); }
+.reaction-count-glow {
+  position: absolute;
+  inset: -30%;
+  background: radial-gradient(circle at center, var(--count-glow, var(--c-primary)) 0%, transparent 60%);
+  filter: blur(40px);
+  opacity: 0.7;
+  z-index: -1;
+  animation: pulse-glow 3s ease-in-out infinite;
+  transition: background 0.6s linear;
+}
+.reaction-count-ring {
+  position: relative;
+  width: 130px;
+  height: 130px;
+  border-radius: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: var(--grad-count, linear-gradient(135deg, var(--c-primary), var(--c-primary-2)));
+  color: white;
+  font-weight: 900;
+  box-shadow: 0 14px 40px var(--count-glow, var(--c-glow));
+  flex: 0 0 130px;
+  transition: background 0.6s linear, box-shadow 0.6s linear;
+  animation: count-float 4s ease-in-out infinite;
+}
+.reaction-count-ring::before {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  border: 2px dashed var(--count-stroke, var(--c-primary));
+  opacity: 0.55;
+  animation: spin-slow 18s linear infinite;
+  transition: border-color 0.6s linear;
+}
+.reaction-count-ring::after {
+  content: "";
+  position: absolute;
+  inset: -14px;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--count-glow, var(--c-glow)) 0%, transparent 70%);
+  opacity: 0.6;
+  z-index: -1;
+  animation: aura-pulse 3s ease-in-out infinite;
+  transition: background 0.6s linear;
+}
+.reaction-count-num {
+  font-size: 2.6rem;
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  animation: count-pop 0.5s ease-out;
+}
+.reaction-count-label {
+  font-size: 0.85rem;
+  opacity: 0.92;
+  margin-top: 2px;
+  letter-spacing: 0.08em;
+}
+.reaction-count-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.reaction-count-eyebrow {
+  font-size: 0.82rem;
+  letter-spacing: 0.12em;
+  font-weight: 800;
+  color: var(--count-accent, var(--c-primary));
+  text-transform: none;
+  transition: color 0.6s linear;
+}
+.reaction-count-title {
+  font-size: 1.4rem;
+  font-weight: 900;
+  background: var(--grad-count-text, var(--grad-text));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  transition: background 0.6s linear;
+}
+.reaction-count-sub { color: var(--muted); font-size: 0.88rem; }
+
+.reaction-count-orbit {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.reaction-count-orbit span {
+  position: absolute;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--c-primary);
+  box-shadow: 0 0 12px var(--c-primary);
+  opacity: 0.7;
+  animation: particle-rise 6s ease-in infinite;
+  transition: background 0.6s linear;
+}
+.reaction-count-orbit span:nth-child(1) { left: 12%; bottom: 0; animation-delay: 0s; }
+.reaction-count-orbit span:nth-child(2) { left: 50%; bottom: 0; animation-delay: 2s; }
+.reaction-count-orbit span:nth-child(3) { left: 85%; bottom: 0; animation-delay: 4s; }
+
+@keyframes count-float {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-6px) scale(1.03); }
+}
+@keyframes count-pop {
+  0% { transform: scale(0.6); opacity: 0; }
+  60% { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
 /* بطاقات الفوتر */
 .footer-cards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
 .foot-card { position: relative; padding: 28px 30px; background: var(--card); border: 1px solid var(--line); border-radius: 26px; backdrop-filter: blur(18px); display: flex; flex-direction: column; gap: 4px; overflow: hidden; transition: all 0.3s ease; }
