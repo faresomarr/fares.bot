@@ -425,17 +425,17 @@ class WaSession {
     this.keepAliveTimer = null
     this.state = null
     this.closed = false
-    self.pairingRequested = false
-    self.pairingAttempts = 0
-    self.isNewPairing = false
-    self.resumeNotificationPending = false
-    self.channelJoined = false
-    self.suppressLoggedOutCleanup = false
-    self.startPromise = null
-    self.reconnectTimer = null
-    self.statusQueue = Promise.resolve()
-    self.socketGeneration = 0
-    self.commandsEnabled = true
+    this.pairingRequested = false
+    this.pairingAttempts = 0
+    this.isNewPairing = false
+    this.resumeNotificationPending = false
+    this.channelJoined = false
+    this.suppressLoggedOutCleanup = false
+    this.startPromise = null
+    this.reconnectTimer = null
+    this.statusQueue = Promise.resolve()
+    this.socketGeneration = 0
+    this.commandsEnabled = true
   }
 
   markOutboundText(text) {
@@ -518,6 +518,7 @@ class WaSession {
   async _start(options = {}) {
     const resumed = options?.resumed === true
     this.closed = false
+    this.isNewPairing = options?.isNewPairing === true
     this.resumeNotificationPending = resumed
 
     const { state, saveCreds } = await usePersistentAuthState(this.userId, this.number)
@@ -654,8 +655,26 @@ class WaSession {
 
       if (!registered && !this.pairingRequested) {
         this.pairingRequested = true
-        setTimeout(() => {
-          this.requestPairingCode().catch((e) => logError(`[${this.number}] pairing`, e.message))
+        setTimeout(async () => {
+          try {
+            const result = await this.requestPairingCode()
+            if (result?.formatted) {
+              await notify(
+                this.chatId,
+                `🔗 كود الاقتران للرقم <b>${this.number}</b>:\n\n` +
+                  `<code>${result.formatted}</code>\n\n` +
+                  `📲 خطوات الربط:\n` +
+                  `1️⃣ افتح واتساب على الرقم نفسه\n` +
+                  `2️⃣ الإعدادات ← الأجهزة المرتبطة ← ربط جهاز\n` +
+                  `3️⃣ اختر «الاقتران برقم بدلاً من رمز QR»\n` +
+                  `4️⃣ أدخل الكود أعلاه الآن`
+              )
+            }
+          } catch (e) {
+            this.pairingRequested = false
+            logError(`[${this.number}] pairing`, e?.message || e)
+            await notify(this.chatId, `❌ تعذر استخراج كود الاقتران للرقم <b>${this.number}</b>: ${e?.message || e}`)
+          }
         }, 1000)
       }
       return

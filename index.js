@@ -229,7 +229,7 @@ async function linkNumber(chatId, userId, rawNumber) {
     )
     .catch(() => {})
 
-  whatsapp.startSession(userId, number, chatId).catch(async (e) => {
+  whatsapp.startSession(userId, number, chatId, { isNewPairing: true }).catch(async (e) => {
     console.error('[بدء الجلسة]', e.message)
     db.removeNumber(userId, number)
     await showDashboard(chatId, userId).catch(() => {})
