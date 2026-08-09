@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>لوحة إعدادات الرقم | Fares Bot</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body class="panel-body">
+    <div class="bg-orb orb-1"></div>
+    <div class="bg-orb orb-2"></div>
+    <div class="bg-grid"></div>
+
+    <header class="topbar shell panel-topbar">
+      <div class="brand">
+        <div class="brand-avatar-wrap">
+          <img class="brand-avatar" src="/hero-image.jpg" alt="Fares Bot" />
+        </div>
+        <div>
+          <strong id="panelBrandName">Fares Bot</strong>
+          <p>موقع إعدادات الرقم المربوط — إدارة كاملة وفورية</p>
+        </div>
+      </div>
+      <nav class="top-actions">
+        <a id="panelIndexLink" class="btn btn-soft" href="/">الصفحة الرئيسية</a>
+        <a id="panelBotLink" class="btn btn-primary" href="#" target="_blank" rel="noreferrer">بوت تيليجرام</a>
+      </nav>
+    </header>
+
+    <main class="shell panel-layout">
+      <!-- شاشة الدخول -->
+      <section class="card panel-login-card" id="panelLoginCard">
+        <div class="section-head compact">
+          <div>
+            <span class="eyebrow">دخول المالك</span>
+            <h1>موقع إعدادات الرقم المربوط</h1>
+            <p id="panelWelcomeText">أدخل الرقم المربوط وكلمة المرور لفتح لوحة الإعدادات الخاصة به.</p>
+          </div>
+        </div>
+        <form id="panelLoginForm" class="comment-form single-col" autocomplete="off">
+          <label class="full">
+            <span>الرقم المربوط</span>
+            <input id="panelNumberInput" type="text" inputmode="numeric" name="number" placeholder="مثال: 96777XXXXXXX" required />
+          </label>
+          <label class="full">
+            <span>كلمة المرور</span>
+            <input id="panelPasswordInput" type="password" name="password" placeholder="كلمة المرور" required />
+            <small id="panelPasswordHint" class="hint-line"></small>
+          </label>
+          <div class="form-actions full">
+            <button class="btn btn-primary" type="submit">تسجيل الدخول</button>
+            <p id="panelLoginStatus" class="form-status"></p>
+          </div>
+        </form>
+
+        <div class="panel-login-help">
+          <strong>💡 إذا لم تكن قد غيّرت كلمة المرور بعد:</strong>
+          <p>كلمة المرور الافتراضية هي الرقم نفسه بصيغته الدولية بدون + (مثال: <code>9677773987296</code>).</p>
+        </div>
+      </section>
+
+      <!-- لوحة الإعدادات بعد الدخول -->
+      <section class="panel-main hidden" id="panelMain">
+        <div class="panel-header card">
+          <div class="section-head">
+            <div>
+              <span class="eyebrow">إعدادات الرقم</span>
+              <h2><span id="panelHeaderNumber">—</span></h2>
+              <p>الحالة الحالية: <span id="panelStatusLabel" class="status-pill">—</span> · إيموجي التفاعل الحالي: <span id="panelEmojiLabel">❤️</span></p>
+            </div>
+            <div class="form-actions">
+              <button class="btn btn-outline" id="panelLogoutBtn" type="button">تسجيل الخروج</button>
+            </div>
+          </div>
+          <div class="panel-header-actions">
+            <button class="btn btn-secondary" id="panelSaveBtn" type="button">💾 حفظ الإعدادات</button>
+            <button class="btn btn-soft" id="panelReloadBtn" type="button">🔄 إعادة التحميل</button>
+            <span class="form-status" id="panelSaveStatus"></span>
+          </div>
+        </div>
+
+        <!-- أمر ربط رقم جديد -->
+        <section class="card panel-pair-card">
+          <div class="section-head compact">
+            <div>
+              <span class="eyebrow">ربط رقم جديد من هذا الرقم</span>
+              <h2>إصدار كود اقتران لرقم آخر</h2>
+              <p>سيتم إصدار كود اقتران لهذا الرقم بالداخل لإكمال الربط على جوال الرقم الآخر.</p>
+            </div>
+          </div>
+          <form id="panelPairForm" class="comment-form">
+            <label class="full">
+              <span>رقم الهدف بالصيغة الدولية</span>
+              <input id="panelPairNumber" type="text" name="number" inputmode="numeric" placeholder="مثال: 96777XXXXXXXX" required />
+            </label>
+            <div class="form-actions full">
+              <button class="btn btn-primary" type="submit">🔗 إصدار كود الاقتران</button>
+              <p id="panelPairStatus" class="form-status"></p>
+            </div>
+          </form>
+          <div id="panelPairCodeBox" class="panel-pair-result hidden">
+            <strong>كود الاقتران:</strong>
+            <code id="panelPairCode">—</code>
+          </div>
+        </section>
+
+        <!-- تغيير كلمة المرور -->
+        <section class="card panel-password-card">
+          <div class="section-head compact">
+            <div>
+              <span class="eyebrow">الأمان</span>
+              <h2>تغيير كلمة مرور هذه اللوحة</h2>
+              <p>تنطبق كلمة المرور هذه على لوحة إعدادات هذا الرقم فقط ولا تؤثر على باقي الأرقام.</p>
+            </div>
+          </div>
+          <form id="panelPasswordForm" class="comment-form">
+            <label>
+              <span>كلمة المرور الحالية</span>
+              <input id="panelCurrentPassword" type="password" name="current" required />
+            </label>
+            <label>
+              <span>كلمة المرور الجديدة</span>
+              <input id="panelNewPassword" type="password" name="new" minlength="4" required />
+            </label>
+            <div class="form-actions full">
+              <button class="btn btn-secondary" type="submit">🔑 تحديث كلمة المرور</button>
+              <p id="panelPasswordStatus" class="form-status"></p>
+            </div>
+          </form>
+        </section>
+
+        <!-- الأعداد نفسها -->
+        <section class="panel-settings card" id="panelSettingsGrid"></section>
+
+        <footer class="panel-footer">
+          <p>جميع الإعدادات محفوظة على الرقم المربوط نفسه، وتدخل حيز التنفيذ فوراً عند الحفظ، دون الحاجة لإعادة تشغيل البوت.</p>
+        </footer>
+      </section>
+    </main>
+
+    <script src="/panel.js"></script>
+  </body>
+</html>
