@@ -748,3 +748,188 @@ img { max-width: 100%; display: block; }
   .panel-header-actions { flex-direction: column; align-items: stretch; }
 }
 
+
+/* ===== owner portal / wallet / reactions additions ===== */
+.owner-portal-section,
+.dashboard-two-col {
+  display: grid;
+  gap: 24px;
+}
+.dashboard-two-col {
+  grid-template-columns: 1.15fr 0.85fr;
+}
+.panel-layout-extended {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding-bottom: 40px;
+}
+.wallet-grid,
+.store-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.wallet-note-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+.subhead-gap { margin-top: 20px; }
+.feature-badges {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.feature-badge {
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+}
+.feature-badge strong,
+.wallet-tx strong,
+.store-card h3,
+.reaction-item-body strong { display: block; color: white; }
+.feature-badge small,
+.wallet-tx small,
+.store-card p,
+.reaction-item-body small,
+.mini-note-box p { color: var(--muted); }
+.wallet-transactions,
+.reaction-log {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.wallet-tx,
+.reaction-item,
+.store-card,
+.mini-note-box {
+  padding: 16px;
+  border-radius: 22px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+}
+.wallet-tx,
+.reaction-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.wallet-tx.credit span { color: #86efac; font-weight: 800; }
+.wallet-tx.debit span { color: #fca5a5; font-weight: 800; }
+.store-card.active {
+  border-color: rgba(37,211,102,0.42);
+  box-shadow: 0 0 0 1px rgba(37,211,102,0.15) inset;
+}
+.store-card-head,
+.store-meta,
+.reaction-indicator-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.store-card p { line-height: 1.8; margin: 10px 0 18px; }
+.reaction-hero {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 18px;
+  border-radius: 26px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.07);
+}
+.reaction-hero.active {
+  border-color: rgba(37,211,102,0.5);
+  box-shadow: 0 0 0 1px rgba(37,211,102,0.15) inset;
+}
+.reaction-heart {
+  width: 78px;
+  height: 78px;
+  border-radius: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2.2rem;
+  background: rgba(37,211,102,0.1);
+  border: 1px solid rgba(37,211,102,0.2);
+}
+.reaction-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #64748b;
+  box-shadow: 0 0 0 6px rgba(100,116,139,0.12);
+}
+.reaction-dot.active {
+  background: #22c55e;
+  box-shadow: 0 0 0 6px rgba(34,197,94,0.18);
+}
+.reaction-item-emoji {
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.4rem;
+  background: rgba(37,211,102,0.1);
+}
+.reaction-item-status {
+  font-size: 0.85rem;
+  color: #bbf7d0;
+  background: rgba(34,197,94,0.12);
+  padding: 8px 10px;
+  border-radius: 999px;
+}
+.tier-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-inline-start: 12px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  color: #cbd5e1;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.1);
+}
+.tier-badge.vip {
+  color: #fde68a;
+  background: rgba(245,158,11,0.12);
+  border-color: rgba(245,158,11,0.28);
+}
+.mini-note-box strong { display: block; margin-bottom: 8px; }
+.mini-note-box p { margin: 0; line-height: 1.9; }
+.wallet-card,
+.status-visibility-card,
+.coin-store-card,
+.panel-pair-card,
+.panel-password-card {
+  padding: 26px;
+}
+@media (max-width: 980px) {
+  .dashboard-two-col,
+  .wallet-grid,
+  .store-grid,
+  .feature-badges {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 720px) {
+  .reaction-hero,
+  .wallet-tx,
+  .reaction-item,
+  .store-card-head,
+  .store-meta {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

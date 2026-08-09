@@ -44,6 +44,15 @@ function formatDuration(ms) {
   return `${minutes} دقيقة`
 }
 
+function escapeHtml(text) {
+  return String(text || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\"/g, '&quot;')
+    .replace(/'/g, '&#039;')
+}
+
 function renderConfig(config) {
   state.config = config
   document.title = `${config.siteTitle} | منصة اقتران واتساب`
@@ -51,15 +60,21 @@ function renderConfig(config) {
   setText('siteDescription', config.siteDescription)
   setText('developerNumberText', config.developerWhatsappNumber)
 
-  const pairingUrl = config.pairingBotUrl || config.telegramBotUrl || '#'
+  const pairingUrl = config.telegramBotUrl || '#'
   const channelUrl = config.whatsappChannelUrl || '#'
   const developerUrl = config.developerWhatsappUrl || '#'
   const websiteUrl = config.websiteUrl || '#'
+  const panelUrl = config.ownerPanelUrl || '/panel'
 
   ;['navPairing', 'heroPairing', 'linkPairing'].forEach((id) => setHref(id, pairingUrl))
   ;['navChannel', 'heroChannel', 'linkChannel', 'rightsChannel', 'footerChannel'].forEach((id) => setHref(id, channelUrl))
-  ;['navDeveloper', 'heroDeveloper', 'linkDeveloper', 'rightsDeveloper', 'footerDeveloper'].forEach((id) => setHref(id, developerUrl))
+  ;['navDeveloper', 'linkDeveloper', 'rightsDeveloper', 'footerDeveloper'].forEach((id) => setHref(id, developerUrl))
+  ;['navPanel', 'heroOwnerPortal', 'linkPanel'].forEach((id) => setHref(id, panelUrl))
   setHref('heroWebsite', websiteUrl)
+  setHref('panelBotLink', pairingUrl)
+
+  const hint = qs('portalLoginStatus')
+  if (hint) hint.textContent = `المكافأة اليومية: ${config.dailyCoinAmount || 50} عملة لكل رقم مربوط.`
 }
 
 function setProgress(idBar, idLabel, value) {
@@ -79,9 +94,7 @@ function renderStats(stats) {
   setText('totalComments', formatNumber(stats.comments.totalComments))
   setText('totalStatusViews', formatNumber(stats.metrics.totalStatusViews))
   setText('totalStatusReactions', formatNumber(stats.metrics.totalStatusReactions))
-  setText('connectedCount', formatNumber(stats.connected))
   setText('activeSessionsCount', formatNumber(stats.runtime.activeSessions))
-  setText('pendingCommentsCount', formatNumber(stats.comments.pendingReplies))
   setText('uptimeLabel', formatDuration(stats.runtime.uptimeMs))
   setText('lastUpdated', `آخر تحديث: ${formatDate(stats.lastUpdatedAt)}`)
 
@@ -123,15 +136,6 @@ function renderComments(comments) {
       `
     })
     .join('')
-}
-
-function escapeHtml(text) {
-  return String(text || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/\"/g, '&quot;')
-    .replace(/'/g, '&#039;')
 }
 
 async function loadConfig() {
@@ -186,10 +190,38 @@ async function submitComment(event) {
   await loadStats()
 }
 
+async function submitPortalLogin(event) {
+  event.preventDefault()
+  const status = qs('portalLoginStatus')
+  const number = String(qs('portalNumber').value || '').replace(/\D/g, '')
+  const password = String(qs('portalPassword').value || '')
+  status.className = 'form-status'
+  status.textContent = 'جاري التحقق...'
+
+  const res = await fetch('/api/panel/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ number, password }),
+  })
+  const data = await res.json()
+  if (!res.ok || !data.ok) {
+    status.className = 'form-status error'
+    status.textContent = data.error || 'فشل تسجيل الدخول.'
+    return
+  }
+
+  localStorage.setItem('panel_token_' + data.number, data.token)
+  status.className = 'form-status success'
+  status.textContent = 'تم تسجيل الدخول، سيتم تحويلك الآن...'
+  window.location.href = '/panel/' + data.number
+}
+
 async function init() {
   await Promise.all([loadConfig(), loadStats(), loadComments()])
   const form = qs('commentForm')
   if (form) form.addEventListener('submit', submitComment)
+  const portalForm = qs('portalLoginForm')
+  if (portalForm) portalForm.addEventListener('submit', submitPortalLogin)
   setInterval(() => {
     loadStats().catch(() => {})
     loadComments().catch(() => {})

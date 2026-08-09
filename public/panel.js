@@ -1,11 +1,13 @@
-// لوحة إعدادات الرقم المربوط — /panel/:number
 (function () {
   const STATE = {
     number: '',
     token: '',
     defaults: {},
     settings: {},
-    fieldMeta: [],
+    wallet: null,
+    reactions: null,
+    fieldMeta: {},
+    refreshTimer: null,
   }
 
   function qs(id) {
@@ -22,8 +24,9 @@
   }
 
   function setStatus(el, text, kind) {
+    if (!el) return
     el.className = 'form-status ' + (kind || '')
-    el.textContent = text
+    el.textContent = text || ''
   }
 
   function startWithNumber() {
@@ -32,7 +35,30 @@
     return match ? match[1] : ''
   }
 
-  async function loadDefaults() {
+  function formatDate(value) {
+    if (!value) return '—'
+    try {
+      return new Date(value).toLocaleString('ar')
+    } catch {
+      return '—'
+    }
+  }
+
+  function formatNumber(value) {
+    return new Intl.NumberFormat('ar').format(Number(value || 0))
+  }
+
+  function formatDuration(ms) {
+    const total = Math.max(0, Math.floor(Number(ms || 0) / 1000))
+    const days = Math.floor(total / 86400)
+    const hours = Math.floor((total % 86400) / 3600)
+    const minutes = Math.floor((total % 3600) / 60)
+    if (days > 0) return `${days} يوم / ${hours} ساعة`
+    if (hours > 0) return `${hours} ساعة / ${minutes} دقيقة`
+    return `${minutes} دقيقة`
+  }
+
+  function loadDefaults() {
     const defaults = {
       name: { label: 'اسم البوت', type: 'text', ph: 'Golden Queen Bot' },
       ownerNumber: { label: 'رقم التواصل', type: 'text', ph: '96777XXXXXXX' },
@@ -92,56 +118,6 @@
       voiceFooter: { label: 'رابط الفوتر الصوتي', type: 'text', ph: 'https://...' },
     }
     STATE.fieldMeta = defaults
-    return defaults
-  }
-
-  function getJsonSafeString(value, fallback) {
-    if (value === undefined || value === null) return fallback || ''
-    return String(value)
-  }
-
-  function buildSettingsGrid(settings, defaults) {
-    const container = qs('panelSettingsGrid')
-    container.innerHTML = ''
-    const fragment = document.createDocumentFragment()
-
-    const groupedLabels = {
-      'معلومات أساسية': ['name', 'ownerNumber', 'ownername', 'description', 'from', 'age', 'prefix', 'footer2', 'mode', 'language'],
-      'التفاعل والحالات': ['statusCustomReact', 'autoStatusRead', 'autoStatusReact', 'statusReactionNotice', 'keepDeletedStatus', 'autoRead', 'autoReact', 'autoPrivateReact', 'autoReactScope'],
-      'الرد التلقائي والـ AI': ['customAutoReplies', 'aiReplyScope', 'aliveMsg', 'customMsg', 'statusMsgSend', 'statusMsgType', 'voiceFooter'],
-      'الحماية والفلاتر': ['antiBad', 'antiBadWords', 'antiLink', 'antiLinkList', 'antiMention', 'antiViewOnce', 'antiBug', 'antiBot', 'antiBotAction', 'antiDelete', 'sendDeleteTo', 'antiEdit', 'antiAction', 'antiWarnCount'],
-      'الاتصالات': ['antiCall', 'excludeCallNumbers', 'autoBlock', 'autoVoice'],
-      'الوجود والكتابة': ['autoTyping', 'autoRecording', 'alwaysOnline', 'ghostMode'],
-      'الإدارة والمحتوى': ['menu', 'alive', 'owner', 'autoSave', 'gaGroupJid', 'gaTimezone', 'gaCloseTime', 'gaOpenTime'],
-    }
-
-    Object.entries(groupedLabels).forEach(([groupName, keys]) => {
-      const block = document.createElement('div')
-      block.className = 'panel-group'
-      const heading = document.createElement('div')
-      heading.className = 'panel-group-head'
-      heading.innerHTML = `<strong>${escapeHtml(groupName)}</strong>`
-      block.appendChild(heading)
-      const grid = document.createElement('div')
-      grid.className = 'panel-fields'
-      keys.forEach((key) => {
-        const meta = defaults[key]
-        if (!meta) return
-        const value = settings[key] != null ? String(settings[key]) : ''
-        const fieldEl = document.createElement('label')
-        fieldEl.className = 'panel-field'
-        const label = document.createElement('span')
-        label.textContent = meta.label
-        const control = createControl(key, meta, value)
-        fieldEl.appendChild(label)
-        fieldEl.appendChild(control)
-        grid.appendChild(fieldEl)
-      })
-      block.appendChild(grid)
-      fragment.appendChild(block)
-    })
-
-    container.appendChild(fragment)
   }
 
   function createControl(key, meta, value) {
@@ -169,6 +145,45 @@
     return el
   }
 
+  function buildSettingsGrid(settings, defaults) {
+    const container = qs('panelSettingsGrid')
+    container.innerHTML = ''
+    const fragment = document.createDocumentFragment()
+    const groupedLabels = {
+      'معلومات أساسية': ['name', 'ownerNumber', 'ownername', 'description', 'from', 'age', 'prefix', 'footer2', 'mode', 'language'],
+      'التفاعل والحالات': ['statusCustomReact', 'autoStatusRead', 'autoStatusReact', 'statusReactionNotice', 'keepDeletedStatus', 'autoRead', 'autoReact', 'autoPrivateReact', 'autoReactScope'],
+      'الرد التلقائي والـ AI': ['customAutoReplies', 'aiReplyScope', 'aliveMsg', 'customMsg', 'statusMsgSend', 'statusMsgType', 'voiceFooter'],
+      'الحماية والفلاتر': ['antiBad', 'antiBadWords', 'antiLink', 'antiLinkList', 'antiMention', 'antiViewOnce', 'antiBug', 'antiBot', 'antiBotAction', 'antiDelete', 'sendDeleteTo', 'antiEdit', 'antiAction', 'antiWarnCount'],
+      الاتصالات: ['antiCall', 'excludeCallNumbers', 'autoBlock', 'autoVoice'],
+      'الوجود والكتابة': ['autoTyping', 'autoRecording', 'alwaysOnline', 'ghostMode'],
+      'الإدارة والمحتوى': ['menu', 'alive', 'owner', 'autoSave', 'gaGroupJid', 'gaTimezone', 'gaCloseTime', 'gaOpenTime'],
+    }
+
+    Object.entries(groupedLabels).forEach(([groupName, keys]) => {
+      const block = document.createElement('div')
+      block.className = 'panel-group'
+      block.innerHTML = `<div class="panel-group-head"><strong>${escapeHtml(groupName)}</strong></div>`
+      const grid = document.createElement('div')
+      grid.className = 'panel-fields'
+      keys.forEach((key) => {
+        const meta = defaults[key]
+        if (!meta) return
+        const value = settings[key] != null ? String(settings[key]) : ''
+        const fieldEl = document.createElement('label')
+        fieldEl.className = 'panel-field'
+        const label = document.createElement('span')
+        label.textContent = meta.label
+        fieldEl.appendChild(label)
+        fieldEl.appendChild(createControl(key, meta, value))
+        grid.appendChild(fieldEl)
+      })
+      block.appendChild(grid)
+      fragment.appendChild(block)
+    })
+
+    container.appendChild(fragment)
+  }
+
   function readFormSettings(form) {
     const out = {}
     form.querySelectorAll('[data-setting-key]').forEach((el) => {
@@ -183,15 +198,12 @@
       opts.body = JSON.stringify(opts.body)
       opts.headers['Content-Type'] = 'application/json'
     }
-    const token = STATE.token
-    if (token) opts.headers['x-panel-token'] = token
+    if (STATE.token) opts.headers['x-panel-token'] = STATE.token
     const res = await fetch(path, opts)
-    let data
+    let data = {}
     try {
       data = await res.json()
-    } catch {
-      data = {}
-    }
+    } catch {}
     return { ok: res.ok, status: res.status, data }
   }
 
@@ -199,26 +211,159 @@
     qs('panelLoginCard').classList.remove('hidden')
     qs('panelMain').classList.add('hidden')
   }
+
   function showMain() {
     qs('panelLoginCard').classList.add('hidden')
     qs('panelMain').classList.remove('hidden')
   }
 
-  async function loadSettings() {
-    const { ok, data } = await api('/api/panel/' + encodeURIComponent(STATE.number) + '/settings')
-    if (!ok || !data.ok) {
-      STATE.token = ''
-      localStorage.removeItem('panel_token_' + STATE.number)
-      showLogin()
-      setStatus(qs('panelLoginStatus'), data?.error || 'انتهت الجلسة، سجّل الدخول مجدداً.', 'error')
+  function renderWallet(wallet) {
+    STATE.wallet = wallet
+    qs('walletBalance').textContent = formatNumber(wallet.balance)
+    qs('walletClaimed').textContent = formatNumber(wallet.totalClaimed)
+    qs('walletSpent').textContent = formatNumber(wallet.totalSpent)
+    qs('walletNextClaim').textContent = wallet.canClaimDaily ? 'متاح الآن' : formatDuration(wallet.remainingMs)
+    qs('panelTierBadge').textContent = wallet.tier || 'STANDARD'
+    qs('panelTierBadge').className = 'tier-badge ' + ((wallet.tier || '').toLowerCase() === 'vip' ? 'vip' : '')
+
+    const claimBtn = qs('claimDailyBtn')
+    claimBtn.disabled = !wallet.canClaimDaily
+    claimBtn.textContent = wallet.canClaimDaily ? `🎁 طلب ${wallet.dailyAmount} عملة اليوم` : '⏳ بانتظار الموعد التالي'
+
+    const activeWrap = qs('activeFeaturesList')
+    if (!wallet.activeFeatures || !wallet.activeFeatures.length) {
+      activeWrap.className = 'feature-badges empty-state'
+      activeWrap.textContent = 'لا توجد مزايا مفعلة حالياً.'
+    } else {
+      activeWrap.className = 'feature-badges'
+      activeWrap.innerHTML = wallet.activeFeatures
+        .map((item) => `<div class="feature-badge"><strong>${escapeHtml(item.title)}</strong><small>ينتهي: ${escapeHtml(formatDate(item.activeUntil))}</small></div>`)
+        .join('')
+    }
+
+    const txWrap = qs('walletTransactions')
+    if (!wallet.transactions || !wallet.transactions.length) {
+      txWrap.className = 'wallet-transactions empty-state'
+      txWrap.textContent = 'لا توجد عمليات حتى الآن.'
+    } else {
+      txWrap.className = 'wallet-transactions'
+      txWrap.innerHTML = wallet.transactions
+        .map((tx) => {
+          const cls = Number(tx.amount || 0) >= 0 ? 'credit' : 'debit'
+          return `
+            <article class="wallet-tx ${cls}">
+              <div>
+                <strong>${escapeHtml(tx.description || tx.type)}</strong>
+                <small>${escapeHtml(formatDate(tx.createdAt))}</small>
+              </div>
+              <span>${Number(tx.amount || 0) > 0 ? '+' : ''}${escapeHtml(formatNumber(tx.amount))}</span>
+            </article>
+          `
+        })
+        .join('')
+    }
+  }
+
+  function renderStore(store) {
+    const wrap = qs('storeOffers')
+    wrap.innerHTML = (store || [])
+      .map(
+        (offer) => `
+        <article class="store-card ${offer.active ? 'active' : ''}">
+          <div class="store-card-head">
+            <div>
+              <span class="eyebrow">${escapeHtml(offer.key)}</span>
+              <h3>${escapeHtml(offer.title)}</h3>
+            </div>
+            <strong>${escapeHtml(formatNumber(offer.price))} عملة</strong>
+          </div>
+          <p>${escapeHtml(offer.description)}</p>
+          <div class="store-meta">
+            <span>${offer.active ? 'مفعلة حتى ' + escapeHtml(formatDate(offer.activeUntil)) : 'غير مفعلة'}</span>
+            <button class="btn ${offer.active ? 'btn-soft' : 'btn-secondary'} buy-offer-btn" data-offer-key="${escapeHtml(offer.key)}" type="button" ${offer.active ? 'disabled' : ''}>${offer.active ? 'مفعلة حالياً' : 'شراء الآن'}</button>
+          </div>
+        </article>
+      `
+      )
+      .join('')
+
+    document.querySelectorAll('.buy-offer-btn').forEach((btn) => {
+      btn.addEventListener('click', () => buyOffer(btn.getAttribute('data-offer-key')))
+    })
+  }
+
+  function renderReactions(reactions) {
+    STATE.reactions = reactions
+    const active = reactions.indicator === 'active'
+    const hero = qs('reactionHero')
+    hero.classList.toggle('active', active)
+    qs('reactionDot').className = 'reaction-dot ' + (active ? 'active' : '')
+    qs('reactionIndicatorText').textContent = active ? 'التفاعل ظاهر الآن باللون الأخضر' : 'لا يوجد تفاعل حديث'
+    qs('reactionTotalCount').textContent = `${formatNumber(reactions.total || 0)} عملية`
+
+    if (reactions.latestReaction) {
+      qs('reactionLatestMeta').textContent = `آخر تفاعل: ${reactions.latestReaction.emoji} على حالة ${reactions.latestReaction.participantLabel || reactions.latestReaction.participantNumber} — ${formatDate(reactions.latestReaction.reactedAt)}`
+    } else {
+      qs('reactionLatestMeta').textContent = 'سيظهر هنا آخر تفاعل ناجح على الحالات.'
+    }
+
+    const wrap = qs('statusReactionsList')
+    if (!reactions.logs || !reactions.logs.length) {
+      wrap.className = 'reaction-log empty-state'
+      wrap.textContent = 'لا توجد تفاعلات حالات مسجلة بعد.'
       return
     }
+
+    wrap.className = 'reaction-log'
+    wrap.innerHTML = reactions.logs
+      .map(
+        (item) => `
+        <article class="reaction-item">
+          <div class="reaction-item-emoji">${escapeHtml(item.emoji)}</div>
+          <div class="reaction-item-body">
+            <strong>تم التفاعل على حالة ${escapeHtml(item.participantLabel || item.participantNumber || 'غير معروف')}</strong>
+            <small>وقت التنفيذ: ${escapeHtml(formatDate(item.reactedAt))}</small>
+          </div>
+          <span class="reaction-item-status">${escapeHtml(item.source || 'auto')}</span>
+        </article>
+      `
+      )
+      .join('')
+  }
+
+  async function loadSettings() {
+    const { ok, data } = await api('/api/panel/' + encodeURIComponent(STATE.number) + '/settings')
+    if (!ok || !data.ok) throw new Error(data?.error || 'انتهت الجلسة.')
     STATE.settings = data.settings || {}
     qs('panelHeaderNumber').textContent = data.number
     qs('panelStatusLabel').textContent = data.status || '—'
     qs('panelEmojiLabel').textContent = data.emoji || '❤️'
     buildSettingsGrid(STATE.settings, STATE.fieldMeta)
-    showMain()
+  }
+
+  async function loadWalletAndStore() {
+    const { ok, data } = await api('/api/panel/' + encodeURIComponent(STATE.number) + '/wallet')
+    if (!ok || !data.ok) throw new Error(data?.error || 'تعذر تحميل المحفظة.')
+    renderWallet(data.wallet)
+    renderStore(data.store || [])
+  }
+
+  async function loadReactionLog() {
+    const { ok, data } = await api('/api/panel/' + encodeURIComponent(STATE.number) + '/status-reactions')
+    if (!ok || !data.ok) throw new Error(data?.error || 'تعذر تحميل سجل التفاعلات.')
+    renderReactions(data.reactions)
+  }
+
+  async function loadAll() {
+    try {
+      await Promise.all([loadSettings(), loadWalletAndStore(), loadReactionLog()])
+      showMain()
+    } catch (e) {
+      STATE.token = ''
+      localStorage.removeItem('panel_token_' + STATE.number)
+      showLogin()
+      setStatus(qs('panelLoginStatus'), e.message || 'انتهت الجلسة، سجّل الدخول مجدداً.', 'error')
+    }
   }
 
   async function handleLogin(ev) {
@@ -247,20 +392,16 @@
       localStorage.setItem('panel_token_' + STATE.number, STATE.token)
       qs('panelPasswordInput').value = ''
       setStatus(statusEl, 'تم تسجيل الدخول بنجاح.', 'success')
-      await loadSettings()
+      history.replaceState({}, '', '/panel/' + STATE.number)
+      await loadAll()
     } catch (e) {
       setStatus(statusEl, e.message || 'فشل تسجيل الدخول.', 'error')
     }
   }
 
   async function handleSave() {
-    const grid = qs('panelSettingsGrid')
     const status = qs('panelSaveStatus')
-    if (!STATE.number || !STATE.token) {
-      setStatus(status, 'انتهت الجلسة.', 'error')
-      return
-    }
-    const settings = readFormSettings(grid)
+    const settings = readFormSettings(qs('panelSettingsGrid'))
     setStatus(status, 'جاري الحفظ...')
     try {
       const { ok, data } = await api('/api/panel/' + encodeURIComponent(STATE.number) + '/settings', {
@@ -273,7 +414,7 @@
       }
       STATE.settings = data.settings || STATE.settings
       qs('panelEmojiLabel').textContent = STATE.settings.statusCustomReact || '❤️'
-      setStatus(status, '✅ تم حفظ الإعدادات وتطبيقها على الرقم بنجاح.', 'success')
+      setStatus(status, '✅ تم حفظ الإعدادات بنجاح.', 'success')
     } catch (e) {
       setStatus(status, e.message || 'فشل الحفظ.', 'error')
     }
@@ -300,7 +441,7 @@
       }
       qs('panelPairCode').textContent = data.code || '—'
       qs('panelPairCodeBox').classList.remove('hidden')
-      setStatus(status, '✅ تم إصدار الكود، استخدمه في جوال الرقم الآخر.', 'success')
+      setStatus(status, '✅ تم إصدار الكود بنجاح.', 'success')
     } catch (e) {
       setStatus(status, e.message || 'فشل إصدار الكود.', 'error')
     }
@@ -329,6 +470,46 @@
     }
   }
 
+  async function handleClaimDaily() {
+    const status = qs('walletStatus')
+    setStatus(status, 'جاري طلب المكافأة اليومية...')
+    try {
+      const { ok, data } = await api('/api/panel/' + encodeURIComponent(STATE.number) + '/claim-daily', {
+        method: 'POST',
+        body: {},
+      })
+      if (!ok || !data.ok) {
+        const nextText = data?.remainingMs ? ` متاح بعد ${formatDuration(data.remainingMs)}.` : ''
+        setStatus(status, (data?.error || 'تعذر استلام المكافأة اليومية.') + nextText, 'error')
+        return
+      }
+      renderWallet(data.wallet)
+      setStatus(status, `✅ تم إضافة ${data.amount} عملة إلى رصيدك.${data.notificationSent ? ' وتم إرسال إشعار خاص إلى الرقم.' : ''}`, 'success')
+    } catch (e) {
+      setStatus(status, e.message || 'تعذر استلام المكافأة اليومية.', 'error')
+    }
+  }
+
+  async function buyOffer(offerKey) {
+    const status = qs('storeStatus')
+    setStatus(status, 'جاري تنفيذ عملية الشراء...')
+    try {
+      const { ok, data } = await api('/api/panel/' + encodeURIComponent(STATE.number) + '/store/buy', {
+        method: 'POST',
+        body: { offerKey },
+      })
+      if (!ok || !data.ok) {
+        setStatus(status, data?.error || 'تعذر تنفيذ عملية الشراء.', 'error')
+        return
+      }
+      renderWallet(data.result.wallet)
+      renderStore((await api('/api/panel/' + encodeURIComponent(STATE.number) + '/wallet')).data.store || [])
+      setStatus(status, `✅ تم شراء ${data.result.offer.title} بنجاح.${data.notificationSent ? ' وتم إرسال إشعار خاص.' : ''}`, 'success')
+    } catch (e) {
+      setStatus(status, e.message || 'تعذر تنفيذ عملية الشراء.', 'error')
+    }
+  }
+
   async function handleLogout() {
     if (STATE.token) {
       await api('/api/panel/logout', { method: 'POST', body: {} })
@@ -336,45 +517,51 @@
     localStorage.removeItem('panel_token_' + STATE.number)
     STATE.token = ''
     STATE.number = ''
-    qs('panelLoginCard').classList.remove('hidden')
-    qs('panelMain').classList.add('hidden')
+    history.replaceState({}, '', '/panel')
     qs('panelSettingsGrid').innerHTML = ''
+    showLogin()
+  }
+
+  function installAutoRefresh() {
+    if (STATE.refreshTimer) clearInterval(STATE.refreshTimer)
+    STATE.refreshTimer = setInterval(() => {
+      if (!STATE.number || !STATE.token) return
+      loadWalletAndStore().catch(() => {})
+      loadReactionLog().catch(() => {})
+    }, 15000)
   }
 
   async function init() {
-    const numberInUrl = startWithNumber()
-    const defaults = await loadDefaults()
-    STATE.fieldMeta = defaults
+    loadDefaults()
+    qs('panelLoginForm').addEventListener('submit', handleLogin)
+    qs('panelSaveBtn').addEventListener('click', handleSave)
+    qs('panelReloadBtn').addEventListener('click', () => loadAll())
+    qs('panelPairForm').addEventListener('submit', handlePair)
+    qs('panelPasswordForm').addEventListener('submit', handlePasswordChange)
+    qs('panelLogoutBtn').addEventListener('click', handleLogout)
+    qs('claimDailyBtn').addEventListener('click', handleClaimDaily)
 
+    const numberInUrl = startWithNumber()
     if (numberInUrl) {
       qs('panelNumberInput').value = numberInUrl
-      const hint = qs('panelPasswordHint')
       try {
         const res = await fetch('/api/panel/' + encodeURIComponent(numberInUrl) + '/default-password')
         const data = await res.json()
         if (data?.ok) {
-          hint.textContent = data.hasCustomPassword
+          qs('panelPasswordHint').textContent = data.hasCustomPassword
             ? 'تم تعيين كلمة مرور مخصصة لهذا الرقم.'
             : 'كلمة المرور الافتراضية: ' + data.defaultPassword + ' (نفس الرقم).'
         }
       } catch {}
-    }
-
-    qs('panelLoginForm').addEventListener('submit', handleLogin)
-    qs('panelSaveBtn').addEventListener('click', handleSave)
-    qs('panelReloadBtn').addEventListener('click', () => loadSettings())
-    qs('panelPairForm').addEventListener('submit', handlePair)
-    qs('panelPasswordForm').addEventListener('submit', handlePasswordChange)
-    qs('panelLogoutBtn').addEventListener('click', handleLogout)
-
-    if (numberInUrl) {
       const saved = localStorage.getItem('panel_token_' + numberInUrl)
       if (saved) {
         STATE.number = numberInUrl
         STATE.token = saved
-        await loadSettings()
+        await loadAll()
       }
     }
+
+    installAutoRefresh()
   }
 
   init().catch((e) => console.error('panel init error', e))

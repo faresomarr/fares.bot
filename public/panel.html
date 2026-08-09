@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>لوحة إعدادات الرقم | Fares Bot</title>
+    <title>لوحة المالك | Fares Bot</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap" rel="stylesheet" />
@@ -21,7 +21,7 @@
         </div>
         <div>
           <strong id="panelBrandName">Fares Bot</strong>
-          <p>موقع إعدادات الرقم المربوط — إدارة كاملة وفورية</p>
+          <p>بوابة المالك — العملات اليومية، سجل التفاعلات، وإدارة الرقم المربوط</p>
         </div>
       </div>
       <nav class="top-actions">
@@ -30,14 +30,13 @@
       </nav>
     </header>
 
-    <main class="shell panel-layout">
-      <!-- شاشة الدخول -->
+    <main class="shell panel-layout panel-layout-extended">
       <section class="card panel-login-card" id="panelLoginCard">
         <div class="section-head compact">
           <div>
             <span class="eyebrow">دخول المالك</span>
-            <h1>موقع إعدادات الرقم المربوط</h1>
-            <p id="panelWelcomeText">أدخل الرقم المربوط وكلمة المرور لفتح لوحة الإعدادات الخاصة به.</p>
+            <h1>تسجيل دخول الرقم المربوط</h1>
+            <p id="panelWelcomeText">أدخل الرقم المربوط وكلمة المرور لفتح لوحة التحكم الكاملة الخاصة به.</p>
           </div>
         </div>
         <form id="panelLoginForm" class="comment-form single-col" autocomplete="off">
@@ -55,21 +54,22 @@
             <p id="panelLoginStatus" class="form-status"></p>
           </div>
         </form>
-
         <div class="panel-login-help">
-          <strong>💡 إذا لم تكن قد غيّرت كلمة المرور بعد:</strong>
-          <p>كلمة المرور الافتراضية هي الرقم نفسه بصيغته الدولية بدون + (مثال: <code>9677773987296</code>).</p>
+          <strong>💡 كلمة المرور الافتراضية</strong>
+          <p>إذا لم تغيّرها من قبل، فالكلمة الافتراضية هي نفس الرقم بصيغته الدولية بدون +.</p>
         </div>
       </section>
 
-      <!-- لوحة الإعدادات بعد الدخول -->
       <section class="panel-main hidden" id="panelMain">
         <div class="panel-header card">
           <div class="section-head">
             <div>
-              <span class="eyebrow">إعدادات الرقم</span>
-              <h2><span id="panelHeaderNumber">—</span></h2>
-              <p>الحالة الحالية: <span id="panelStatusLabel" class="status-pill">—</span> · إيموجي التفاعل الحالي: <span id="panelEmojiLabel">❤️</span></p>
+              <span class="eyebrow">لوحة الرقم</span>
+              <h2><span id="panelHeaderNumber">—</span> <span id="panelTierBadge" class="tier-badge">STANDARD</span></h2>
+              <p>
+                الحالة الحالية: <span id="panelStatusLabel" class="status-pill">—</span>
+                · إيموجي التفاعل: <span id="panelEmojiLabel">❤️</span>
+              </p>
             </div>
             <div class="form-actions">
               <button class="btn btn-outline" id="panelLogoutBtn" type="button">تسجيل الخروج</button>
@@ -82,13 +82,88 @@
           </div>
         </div>
 
-        <!-- أمر ربط رقم جديد -->
+        <section class="dashboard-two-col">
+          <section class="card wallet-card">
+            <div class="section-head compact">
+              <div>
+                <span class="eyebrow">المحفظة اليومية</span>
+                <h2>رصيد العملات</h2>
+              </div>
+              <button id="claimDailyBtn" class="btn btn-primary" type="button">🎁 طلب 50 عملة اليوم</button>
+            </div>
+            <div class="wallet-grid">
+              <article class="stat-card accent-green"><span>الرصيد الحالي</span><strong id="walletBalance">0</strong></article>
+              <article class="stat-card accent-gold"><span>إجمالي المستلم</span><strong id="walletClaimed">0</strong></article>
+              <article class="stat-card accent-red"><span>إجمالي المصروف</span><strong id="walletSpent">0</strong></article>
+              <article class="stat-card accent-blue"><span>الاستلام القادم</span><strong id="walletNextClaim">متاح الآن</strong></article>
+            </div>
+            <div class="wallet-note-row">
+              <p class="hint-line" id="walletClaimHint">كل رقم مربوط يحصل على 50 عملة مجانية كل 24 ساعة.</p>
+              <p class="form-status" id="walletStatus"></p>
+            </div>
+            <div class="section-head compact subhead-gap">
+              <div>
+                <span class="eyebrow">المزايا النشطة</span>
+                <h3>الاشتراكات الحالية</h3>
+              </div>
+            </div>
+            <div id="activeFeaturesList" class="feature-badges empty-state">لا توجد مزايا مفعلة حالياً.</div>
+            <div class="section-head compact subhead-gap">
+              <div>
+                <span class="eyebrow">سجل العمليات</span>
+                <h3>آخر الحركات</h3>
+              </div>
+            </div>
+            <div id="walletTransactions" class="wallet-transactions empty-state">لا توجد عمليات حتى الآن.</div>
+          </section>
+
+          <section class="card status-visibility-card">
+            <div class="section-head compact">
+              <div>
+                <span class="eyebrow">حالة التفاعل</span>
+                <h2>مؤشر ظهور التفاعل</h2>
+                <p>إذا نجح تفاعل الرقم المربوط على حالة جديدة سيظهر المؤشر والقلب باللون الأخضر هنا بشكل واضح.</p>
+              </div>
+            </div>
+            <div class="reaction-hero" id="reactionHero">
+              <div class="reaction-heart" id="reactionHeart">💚</div>
+              <div>
+                <div class="reaction-indicator-row">
+                  <span class="reaction-dot" id="reactionDot"></span>
+                  <strong id="reactionIndicatorText">لا يوجد تفاعل حديث</strong>
+                </div>
+                <p id="reactionLatestMeta" class="hint-line">سيظهر هنا آخر تفاعل ناجح على الحالات.</p>
+              </div>
+            </div>
+            <div class="section-head compact subhead-gap">
+              <div>
+                <span class="eyebrow">السجل المباشر</span>
+                <h3>آخر تفاعلات الحالات</h3>
+              </div>
+              <small id="reactionTotalCount">0 عملية</small>
+            </div>
+            <div id="statusReactionsList" class="reaction-log empty-state">لا توجد تفاعلات حالات مسجلة بعد.</div>
+          </section>
+        </section>
+
+        <section class="card coin-store-card">
+          <div class="section-head compact">
+            <div>
+              <span class="eyebrow">استخدام العملات</span>
+              <h2>متجر المزايا المشروعة داخل البوت</h2>
+              <p>يمكنك صرف العملات لفتح مزايا خاصة، أوامر مدفوعة، وسجل أوسع أو ترقية VIP داخل نفس المشروع.</p>
+            </div>
+          </div>
+          <div id="storeOffers" class="store-grid"></div>
+          <p id="storeStatus" class="form-status"></p>
+        </section>
+
         <section class="card panel-pair-card">
           <div class="section-head compact">
             <div>
-              <span class="eyebrow">ربط رقم جديد من هذا الرقم</span>
+              <span class="eyebrow">ربط رقم جديد</span>
               <h2>إصدار كود اقتران لرقم آخر</h2>
-              <p>سيتم إصدار كود اقتران لهذا الرقم بالداخل لإكمال الربط على جوال الرقم الآخر.</p>
+              <p>يصدر الكود من داخل الرقم الحالي دون التأثير على جلسته الحالية.</p>
             </div>
           </div>
           <form id="panelPairForm" class="comment-form">
@@ -107,13 +182,12 @@
           </div>
         </section>
 
-        <!-- تغيير كلمة المرور -->
         <section class="card panel-password-card">
           <div class="section-head compact">
             <div>
               <span class="eyebrow">الأمان</span>
-              <h2>تغيير كلمة مرور هذه اللوحة</h2>
-              <p>تنطبق كلمة المرور هذه على لوحة إعدادات هذا الرقم فقط ولا تؤثر على باقي الأرقام.</p>
+              <h2>تغيير كلمة المرور</h2>
+              <p>كلمة المرور هذه تخص هذا الرقم فقط وتُستخدم في تسجيل الدخول إلى الموقع.</p>
             </div>
           </div>
           <form id="panelPasswordForm" class="comment-form">
@@ -132,11 +206,10 @@
           </form>
         </section>
 
-        <!-- الأعداد نفسها -->
         <section class="panel-settings card" id="panelSettingsGrid"></section>
 
         <footer class="panel-footer">
-          <p>جميع الإعدادات محفوظة على الرقم المربوط نفسه، وتدخل حيز التنفيذ فوراً عند الحفظ، دون الحاجة لإعادة تشغيل البوت.</p>
+          <p>كل العمليات مرتبطة بنفس الرقم المربوط: الإعدادات، الرصيد، السجل، والمزايا النشطة، وتُطبق مباشرة بعد الحفظ.</p>
         </footer>
       </section>
     </main>
