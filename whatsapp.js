@@ -360,48 +360,43 @@ async function _createIsolatedPairingSocket(keyStorePath, version) {
 }
 
 async function _waitForPairingReady(sock, timeoutMs = 45_000) {
-  // ننتظر حتى يُصدر المقبس حدث "qr" (يدل على نجاح الاتصال بخوادم واتساب
-  // وأن طبقة الطلبات جاهزة لاستقبال نداء requestPairingCode). كذلك نلتقط
-  // connection.close لرفض الوعد مبكراً إن أُغلق المقبس.
+  // ننتظر حتى يصبح المقبس في حالة تسمح بنداء requestPairingCode.
+  // بعض إصدارات Baileys تُرجع qr كسلسلة نصية، وبعضها يطلق حدث qr منفصلاً.
+  // كذلك قد تصبح الوصلة جاهزة قبل ظهور qr صراحة، لذا نراقب readyState أيضاً.
   return new Promise((resolve, reject) => {
     let settled = false
+    const finish = (err = null) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      clearInterval(probe)
+      cleanup()
+      if (err) reject(err)
+      else resolve()
+    }
     const cleanup = () => {
       try { sock.ev.off('connection.update', onUpdate) } catch {}
       try { sock.ev.off('qr', onQr) } catch {}
       try { sock.ev.off('connection.close', onClose) } catch {}
     }
-    const onQr = () => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      cleanup()
-      resolve()
-    }
-    const onClose = () => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      cleanup()
-      reject(new Error('Connection Closed'))
-    }
+    const onQr = () => finish()
+    const onClose = () => finish(new Error('Connection Closed'))
     const onUpdate = (u) => {
       if (settled) return
-      // في Baileys v7 يأتي حدث "qr" منفصلاً قبل/أثناء connection.update.
-      // الاكتفاء بـ connection.update يكفي غالباً لأن المكتبة تطلق "qr"
-      // بنفس المرحلة، لكن نُبقي هذا كحماية إضافية.
-      if (u?.qr && Array.isArray(u.qr) && u.qr.length) {
-        onQr()
+      const qr = u?.qr
+      if ((typeof qr === 'string' && qr.trim()) || (Array.isArray(qr) && qr.length)) {
+        finish()
         return
       }
-      // لو دخل connecting بدون qr (في حالات نادرة) ننتظر qr.
-      // لو دخل open من دون تسجيل الدخول فهذا يعني نجاح الاقتران مسبقاً — لا نريد ذلك.
+      if ((u?.connection === 'connecting' || u?.connection === 'open') && sock?.ws?.readyState === 1) {
+        finish()
+      }
     }
-    const timer = setTimeout(() => {
+    const probe = setInterval(() => {
       if (settled) return
-      settled = true
-      cleanup()
-      reject(new Error('انتهت مهلة انتظار جاهزية المقبس'))
-    }, timeoutMs)
+      if (sock?.ws?.readyState === 1) finish()
+    }, 400)
+    const timer = setTimeout(() => finish(new Error('انتهت مهلة انتظار جاهزية المقبس')), timeoutMs)
     try { sock.ev.on('connection.update', onUpdate) } catch {}
     try { sock.ev.on('qr', onQr) } catch {}
     try { sock.ev.on('connection.close', onClose) } catch {}
@@ -532,6 +527,135 @@ function ha(text) {
     .replace(/>/g, '&gt;')
 }
 
+function normalizeOnOffValue(value) {
+  const v = String(value || '').trim().toLowerCase()
+  if (['on', '1', 'true', 'yes', 'enable', 'enabled', 'تشغيل', 'مفعل', 'تفعيل'].includes(v)) return 'on'
+  if (['off', '0', 'false', 'no', 'disable', 'disabled', 'ايقاف', 'إيقاف', 'تعطيل', 'مطفأ'].includes(v)) return 'off'
+  return null
+}
+
+function parseListSetting(value) {
+  return String(value || '')
+    .split(/[\n,،|]+/)
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean)
+}
+
+function unwrapMessageObject(message) {
+  let current = message && typeof message === 'object' ? message : {}
+  const seen = new Set()
+  while (current && typeof current === 'object' && !seen.has(current)) {
+    seen.add(current)
+    if (current.ephemeralMessage?.message) {
+      current = current.ephemeralMessage.message
+      continue
+    }
+    if (current.viewOnceMessage?.message) {
+      current = current.viewOnceMessage.message
+      continue
+    }
+    if (current.viewOnceMessageV2?.message) {
+      current = current.viewOnceMessageV2.message
+      continue
+    }
+    if (current.viewOnceMessageV2Extension?.message) {
+      current = current.viewOnceMessageV2Extension.message
+      continue
+    }
+    if (current.documentWithCaptionMessage?.message) {
+      current = current.documentWithCaptionMessage.message
+      continue
+    }
+    break
+  }
+  return current || {}
+}
+
+function hasViewOncePayload(message) {
+  const raw = message && typeof message === 'object' ? message : {}
+  return Boolean(raw.viewOnceMessage?.message || raw.viewOnceMessageV2?.message || raw.viewOnceMessageV2Extension?.message)
+}
+
+function extractMentionedJids(msg) {
+  const out = new Set()
+  const raw = msg?.message && typeof msg.message === 'object' ? msg.message : {}
+  const unwrapped = unwrapMessageObject(raw)
+  const containers = [raw, unwrapped]
+  for (const container of containers) {
+    const lists = [
+      container?.extendedTextMessage?.contextInfo?.mentionedJid,
+      container?.imageMessage?.contextInfo?.mentionedJid,
+      container?.videoMessage?.contextInfo?.mentionedJid,
+      container?.documentMessage?.contextInfo?.mentionedJid,
+      container?.buttonsResponseMessage?.contextInfo?.mentionedJid,
+      container?.templateButtonReplyMessage?.contextInfo?.mentionedJid,
+      container?.listResponseMessage?.contextInfo?.mentionedJid,
+    ]
+    for (const value of lists) {
+      if (!Array.isArray(value)) continue
+      for (const jid of value) {
+        const clean = String(jid || '').trim()
+        if (clean) out.add(clean)
+      }
+    }
+  }
+  return Array.from(out)
+}
+
+function detectProtocolAction(msg) {
+  const protocol = msg?.message?.protocolMessage
+  if (!protocol || typeof protocol !== 'object') return null
+  const type = Number(protocol.type)
+  if (protocol.editedMessage || type === 14) return 'edit'
+  if (protocol.key && (!Number.isFinite(type) || type === 0)) return 'delete'
+  return null
+}
+
+function containsBlockedLink(text, blockList = []) {
+  const lower = String(text || '').toLowerCase()
+  if (!lower) return false
+  const hasAnyUrl = /(?:https?:\/\/|www\.|chat\.whatsapp\.com\/|wa\.me\/|t\.me\/|telegram\.me\/)/i.test(lower)
+  if (blockList.length) {
+    return blockList.some((token) => token && lower.includes(String(token).toLowerCase())) || hasAnyUrl
+  }
+  return hasAnyUrl
+}
+
+function containsBlockedWord(text, words = []) {
+  const lower = String(text || '').toLowerCase()
+  if (!lower || !words.length) return false
+  return words.some((word) => {
+    const token = String(word || '').trim().toLowerCase()
+    return token && lower.includes(token)
+  })
+}
+
+function isLikelyBugPayload(msg, text) {
+  const body = String(text || '')
+  const serialized = (() => {
+    try {
+      return JSON.stringify(msg?.message || {})
+    } catch {
+      return body
+    }
+  })()
+  const controlChars = (body.match(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g) || []).length
+  const invisibles = (body.match(/[\u200B-\u200F\u202A-\u202E\u2060\uFEFF]/g) || []).length
+  const newLines = (body.match(/\n/g) || []).length
+  return body.length > 6000 || serialized.length > 50000 || controlChars > 20 || invisibles > 80 || newLines > 80
+}
+
+const PROTECTION_TOGGLE_COMMANDS = {
+  antilink: 'antiLink',
+  antibad: 'antiBad',
+  antimention: 'antiMention',
+  antibug: 'antiBug',
+  antibot: 'antiBot',
+  antidelete: 'antiDelete',
+  anticall: 'antiCall',
+  antiviewonce: 'antiViewOnce',
+}
+
 // مهارات التعرف على الإعدادات (synonyms)
 const PHONE_SYNONYMS = {
   name: ['name', 'botname', 'اسم', 'اسمالبوت', 'بوت.اسم'],
@@ -627,6 +751,9 @@ class WaSession {
     this.socketGeneration = 0
     this.commandsEnabled = true
     this.handledMediaRequestIds = new Map()
+    this.groupMetadataCache = new Map()
+    this.recentIncomingMessages = new Map()
+    this.groupWarnings = new Map()
   }
 
   markOutboundText(text) {
@@ -681,6 +808,316 @@ class WaSession {
     for (const [key, ts] of this.handledMediaRequestIds.entries()) {
       if (now - Number(ts || 0) > maxAgeMs) this.handledMediaRequestIds.delete(key)
     }
+  }
+
+  buildStoredMessageKey(key) {
+    const remoteJid = String(key?.remoteJid || '').trim()
+    const id = String(key?.id || '').trim()
+    if (!remoteJid || !id) return ''
+    return `${remoteJid}::${id}`
+  }
+
+  extractSenderJid(msg) {
+    return String(msg?.key?.participant || msg?.participant || msg?.key?.remoteJid || '').trim()
+  }
+
+  pruneStoredMessages(maxAgeMs = 1000 * 60 * 60 * 6, maxEntries = 2000) {
+    const now = Date.now()
+    for (const [key, entry] of this.recentIncomingMessages.entries()) {
+      if (!entry || now - Number(entry.timestamp || 0) > maxAgeMs) {
+        this.recentIncomingMessages.delete(key)
+      }
+    }
+    if (this.recentIncomingMessages.size <= maxEntries) return
+    const excess = this.recentIncomingMessages.size - maxEntries
+    const keys = Array.from(this.recentIncomingMessages.keys()).slice(0, excess)
+    for (const key of keys) this.recentIncomingMessages.delete(key)
+  }
+
+  storeIncomingMessage(msg) {
+    const key = this.buildStoredMessageKey(msg?.key)
+    if (!key) return
+    const raw = msg?.message && typeof msg.message === 'object' ? msg.message : {}
+    const inner = unwrapMessageObject(raw)
+    const kind = inner?.conversation || inner?.extendedTextMessage?.text
+      ? 'text'
+      : inner?.imageMessage
+        ? hasViewOncePayload(raw) ? 'view_once_image' : 'image'
+        : inner?.videoMessage
+          ? hasViewOncePayload(raw) ? 'view_once_video' : 'video'
+          : inner?.documentMessage
+            ? 'document'
+            : inner?.audioMessage
+              ? 'audio'
+              : inner?.stickerMessage
+                ? 'sticker'
+                : Object.keys(inner || {})[0] || 'message'
+    this.recentIncomingMessages.set(key, {
+      key: msg?.key,
+      timestamp: Date.now(),
+      senderJid: this.extractSenderJid(msg),
+      groupJid: String(msg?.key?.remoteJid || '').trim(),
+      kind,
+      text: extractTextFromMessage(msg),
+      pushName: String(msg?.pushName || '').trim(),
+    })
+    this.pruneStoredMessages()
+  }
+
+  getStoredMessageByKey(key) {
+    return this.recentIncomingMessages.get(this.buildStoredMessageKey(key)) || null
+  }
+
+  pruneGroupMetadataCache(maxAgeMs = 1000 * 60 * 2) {
+    const now = Date.now()
+    for (const [key, entry] of this.groupMetadataCache.entries()) {
+      if (!entry || now - Number(entry.savedAt || 0) > maxAgeMs) this.groupMetadataCache.delete(key)
+    }
+  }
+
+  async getGroupMetadataCached(groupJid) {
+    if (!this.sock || !groupJid || !String(groupJid).endsWith('@g.us')) return null
+    this.pruneGroupMetadataCache()
+    const cached = this.groupMetadataCache.get(groupJid)
+    if (cached?.value) return cached.value
+    try {
+      const metadata = await this.sock.groupMetadata(groupJid)
+      this.groupMetadataCache.set(groupJid, { savedAt: Date.now(), value: metadata })
+      return metadata
+    } catch (e) {
+      logWarn(`[${this.number}] groupMetadata ${groupJid}:`, e?.message || e)
+      return null
+    }
+  }
+
+  async isPrivilegedGroupParticipant(groupJid, participantJid) {
+    const target = String(participantJid || '').trim()
+    if (!target) return true
+    if (target === this.ownJid || target === `${this.number}@s.whatsapp.net`) return true
+    const metadata = await this.getGroupMetadataCached(groupJid)
+    const member = metadata?.participants?.find((item) => String(item.id || '').trim() === target)
+    return Boolean(member?.admin === 'admin' || member?.admin === 'superadmin')
+  }
+
+  async canModerateParticipant(groupJid, participantJid) {
+    const metadata = await this.getGroupMetadataCached(groupJid)
+    if (!metadata) return false
+    const self = metadata.participants?.find((item) => String(item.id || '').trim() === String(this.ownJid || `${this.number}@s.whatsapp.net`).trim())
+    const target = metadata.participants?.find((item) => String(item.id || '').trim() === String(participantJid || '').trim())
+    const selfIsAdmin = Boolean(self?.admin === 'admin' || self?.admin === 'superadmin')
+    const targetIsAdmin = Boolean(target?.admin === 'admin' || target?.admin === 'superadmin')
+    return selfIsAdmin && !targetIsAdmin
+  }
+
+  normalizeProtectionAction(value) {
+    const raw = String(value || '').trim().toLowerCase()
+    if (['off', 'none', 'تعطيل'].includes(raw)) return 'off'
+    if (['delete', 'حذف'].includes(raw)) return 'delete'
+    if (['remove', 'kick', 'طرد'].includes(raw)) return 'remove'
+    if (['block', 'حظر'].includes(raw)) return 'block'
+    return 'warn'
+  }
+
+  bumpProtectionWarning(groupJid, participantJid) {
+    const key = `${String(groupJid || '').trim()}::${String(participantJid || '').trim()}`
+    const now = Date.now()
+    const previous = this.groupWarnings.get(key)
+    const current = previous && now - Number(previous.lastAt || 0) < 1000 * 60 * 60 * 12
+      ? { count: Number(previous.count || 0), lastAt: Number(previous.lastAt || 0) }
+      : { count: 0, lastAt: 0 }
+    current.count += 1
+    current.lastAt = now
+    this.groupWarnings.set(key, current)
+    return current
+  }
+
+  async tryDeleteGroupMessage(groupJid, keyOrMsg) {
+    if (!this.sock || !groupJid) return false
+    const key = keyOrMsg?.key ? keyOrMsg.key : keyOrMsg
+    if (!key?.id) return false
+    try {
+      await this.sock.sendMessage(groupJid, { delete: key })
+      return true
+    } catch (e) {
+      logWarn(`[${this.number}] delete group message failed:`, e?.message || e)
+      return false
+    }
+  }
+
+  isLikelyAutomatedMessage(msg, text = '') {
+    const raw = msg?.message && typeof msg.message === 'object' ? msg.message : {}
+    const inner = unwrapMessageObject(raw)
+    const pushName = String(msg?.pushName || '').trim().toLowerCase()
+    if (/(^|\b)(bot|بوت)(\b|$)/i.test(pushName)) return true
+    if (inner?.buttonsMessage || inner?.listMessage || inner?.templateMessage || inner?.interactiveMessage) return true
+    const body = String(text || '').trim()
+    return /^[.\/#!][a-z0-9_-]{2,}\b/i.test(body) && body.split(/\s+/).length > 4
+  }
+
+  async applyProtectionAction(groupJid, participantJid, msg, reason, settings = {}, options = {}) {
+    const action = this.normalizeProtectionAction(settings.antiAction)
+    const warnLimit = Math.max(1, Math.min(20, Number(settings.antiWarnCount || 3) || 3))
+    const warning = this.bumpProtectionWarning(groupJid, participantJid)
+    await this.tryDeleteGroupMessage(groupJid, msg)
+
+    let outcome = `⚠️ تم رصد مخالفة ${reason} من ${String(participantJid || '').split('@')[0] || 'عضو'}\nالتحذير: ${warning.count}/${warnLimit}`
+    if (action === 'delete') {
+      outcome = `🗑 تم حذف الرسالة المخالفة (${reason}).`
+    } else if ((action === 'remove' || action === 'block') && warning.count >= warnLimit) {
+      const canModerate = await this.canModerateParticipant(groupJid, participantJid)
+      if (canModerate) {
+        try {
+          await this.sock.groupParticipantsUpdate(groupJid, [participantJid], 'remove')
+          outcome = `🚫 تم طرد ${String(participantJid || '').split('@')[0]} بسبب ${reason}.`
+        } catch (e) {
+          logWarn(`[${this.number}] group remove failed:`, e?.message || e)
+        }
+      }
+      if (action === 'block' && typeof this.sock.updateBlockStatus === 'function') {
+        try {
+          await this.sock.updateBlockStatus(participantJid, 'block')
+          outcome += '\n⛔ تم حظر العضو أيضاً.'
+        } catch (e) {
+          logWarn(`[${this.number}] block failed:`, e?.message || e)
+        }
+      }
+    }
+
+    const footer = Array.isArray(options.footerLines) && options.footerLines.length
+      ? `\n${options.footerLines.join('\n')}`
+      : ''
+    await this.sendReplyTo(groupJid, `${outcome}${footer}`)
+    return true
+  }
+
+  async handleDeleteOrEditProtection(msg, groupJid, settings) {
+    const protocolAction = detectProtocolAction(msg)
+    if (!protocolAction) return false
+    const protocol = msg?.message?.protocolMessage
+    const offender = this.extractSenderJid(msg)
+
+    if (protocolAction === 'delete' && settings.antiDelete === 'on') {
+      const original = this.getStoredMessageByKey(protocol?.key)
+      const summary = original?.text || 'رسالة بدون نص أو وسيط'
+      const destination = ['owner', 'inbox'].includes(String(settings.sendDeleteTo || '').trim().toLowerCase()) ? 'owner' : 'group'
+      const lines = [
+        '🧾 تم رصد حذف رسالة داخل مجموعة.',
+        `👤 العضو: ${String(offender || '').split('@')[0] || 'غير معروف'}`,
+        `📝 المحتوى: ${summary.slice(0, 900)}`,
+        `📦 النوع: ${original?.kind || 'message'}`,
+      ]
+      if (destination === 'owner') await this.sendSelfDM(lines.join('\n')).catch(() => {})
+      else await this.sendReplyTo(groupJid, lines.join('\n')).catch(() => {})
+      if (offender && !(await this.isPrivilegedGroupParticipant(groupJid, offender))) {
+        await this.applyProtectionAction(groupJid, offender, msg, 'حذف الرسائل', settings)
+      }
+      return true
+    }
+
+    if (protocolAction === 'edit' && String(settings.antiEdit || 'off').toLowerCase() !== 'off') {
+      const original = this.getStoredMessageByKey(protocol?.key)
+      const editedText = extractTextFromMessage({ message: protocol?.editedMessage || {} }) || 'تم تعديل رسالة غير نصية'
+      const routeToOwner = ['owner', 'inbox'].includes(String(settings.antiEdit || '').trim().toLowerCase())
+      const lines = [
+        '✏️ تم رصد تعديل رسالة داخل مجموعة.',
+        `👤 العضو: ${String(offender || '').split('@')[0] || 'غير معروف'}`,
+        `📝 قبل: ${(original?.text || 'غير متوفر').slice(0, 500)}`,
+        `🆕 بعد: ${editedText.slice(0, 500)}`,
+      ]
+      if (routeToOwner) await this.sendSelfDM(lines.join('\n')).catch(() => {})
+      else await this.sendReplyTo(groupJid, lines.join('\n')).catch(() => {})
+
+      const moderationSetting = this.normalizeProtectionAction(settings.antiEdit)
+      if (moderationSetting !== 'off' && moderationSetting !== 'warn' && offender && !(await this.isPrivilegedGroupParticipant(groupJid, offender))) {
+        await this.applyProtectionAction(groupJid, offender, msg, 'تعديل الرسائل', { ...settings, antiAction: moderationSetting })
+      }
+      return true
+    }
+
+    return false
+  }
+
+  async handleGroupProtections(msg) {
+    const groupJid = String(msg?.key?.remoteJid || '').trim()
+    if (!groupJid || !groupJid.endsWith('@g.us')) return false
+    const record = db.getNumber(this.userId, this.number)
+    if (!record) return false
+    const settings = record.settings || {}
+
+    if (await this.handleDeleteOrEditProtection(msg, groupJid, settings)) return true
+
+    const participantJid = this.extractSenderJid(msg)
+    if (!participantJid || msg.key?.fromMe) return false
+    if (await this.isPrivilegedGroupParticipant(groupJid, participantJid)) {
+      this.storeIncomingMessage(msg)
+      return false
+    }
+
+    this.storeIncomingMessage(msg)
+    const text = extractTextFromMessage(msg)
+
+    if (settings.antiViewOnce === 'on' && hasViewOncePayload(msg?.message)) {
+      return this.applyProtectionAction(groupJid, participantJid, msg, 'رسائل العرض مرة واحدة', settings)
+    }
+
+    if (settings.antiBug === 'on' && isLikelyBugPayload(msg, text)) {
+      return this.applyProtectionAction(groupJid, participantJid, msg, 'رسائل البق', settings)
+    }
+
+    if (settings.antiLink === 'on' && containsBlockedLink(text, parseListSetting(settings.antiLinkList))) {
+      return this.applyProtectionAction(groupJid, participantJid, msg, 'الروابط الممنوعة', settings)
+    }
+
+    if (settings.antiBad === 'on' && containsBlockedWord(text, parseListSetting(settings.antiBadWords))) {
+      return this.applyProtectionAction(groupJid, participantJid, msg, 'الكلمات الممنوعة', settings)
+    }
+
+    if (settings.antiMention === 'on' && extractMentionedJids(msg).length) {
+      return this.applyProtectionAction(groupJid, participantJid, msg, 'المنشن', settings)
+    }
+
+    if (settings.antiBot === 'on' && this.isLikelyAutomatedMessage(msg, text)) {
+      return this.applyProtectionAction(groupJid, participantJid, msg, 'رسائل البوتات', settings)
+    }
+
+    return false
+  }
+
+  async handleIncomingCall(callEvents) {
+    const record = db.getNumber(this.userId, this.number)
+    const settings = record?.settings || {}
+    if (settings.antiCall !== 'on' || !this.sock) return false
+    const excluded = new Set(parseListSetting(settings.excludeCallNumbers).map((item) => item.replace(/\D/g, '')))
+    const events = Array.isArray(callEvents) ? callEvents : [callEvents]
+
+    for (const call of events) {
+      const caller = String(call?.from || call?.creator || call?.peerJid || '').trim()
+      const callerNumber = caller.replace(/@.*/, '').replace(/\D/g, '')
+      if (!caller || !callerNumber || excluded.has(callerNumber) || callerNumber === String(this.number)) continue
+      try {
+        if (typeof this.sock.rejectCall === 'function' && call?.id) {
+          await this.sock.rejectCall(call.id, caller)
+        }
+      } catch (e) {
+        logWarn(`[${this.number}] reject call failed:`, e?.message || e)
+      }
+
+      if (this.normalizeProtectionAction(settings.antiAction) === 'block' && typeof this.sock.updateBlockStatus === 'function') {
+        try {
+          await this.sock.updateBlockStatus(caller, 'block')
+        } catch (e) {
+          logWarn(`[${this.number}] block caller failed:`, e?.message || e)
+        }
+      }
+
+      await this.sendSelfDM(
+        `📵 تم تفعيل حماية الاتصالات على رقمك ${this.number}.\n` +
+          `المتصل: ${callerNumber}\n` +
+          `تم رفض الاتصال${this.normalizeProtectionAction(settings.antiAction) === 'block' ? ' وحظر الرقم.' : '.'}`
+      ).catch(() => {})
+    }
+
+    return true
   }
 
   buildMediaCaption(result) {
@@ -812,6 +1249,7 @@ class WaSession {
     this.state = state
 
     const version = await getLatestVersion()
+    const isRegistered = !!state?.creds?.registered
 
     const sock = makeWASocket({
       auth: state,
@@ -821,9 +1259,9 @@ class WaSession {
       logger: pino({ level: 'silent' }),
       markOnlineOnConnect: false,
       syncFullHistory: false,
-      fireInitQueries: true,
+      fireInitQueries: isRegistered,
       keepAliveIntervalMs: 20_000,
-      defaultQueryTimeoutMs: undefined,
+      defaultQueryTimeoutMs: isRegistered ? undefined : 60_000,
       connectTimeoutMs: 60_000,
       getMessage: async () => undefined,
       emitOwnEvents: false, // لا تُمرّر رسائل الإرسال الخاصة ضمن upsert
@@ -859,6 +1297,10 @@ class WaSession {
           logError(`[${this.number}] messages.upsert`, e.message)
         )
       }
+    })
+
+    sock.ev.on('call', (calls) => {
+      this.handleIncomingCall(calls).catch((e) => logError(`[${this.number}] call`, e?.message || e))
     })
 
     if (config.PROCESS_HISTORY_STATUSES) {
@@ -944,7 +1386,11 @@ class WaSession {
         this.pairingRequested = true
         setTimeout(async () => {
           try {
-            const result = await this.requestPairingCode()
+            const result = await this.requestPairingCode(this.number, {
+              maxAttempts: 8,
+              retryDelayMs: 1500,
+              requestTimeoutMs: 30000,
+            })
             if (result?.formatted) {
               await notify(
                 this.chatId,
@@ -962,7 +1408,7 @@ class WaSession {
             logError(`[${this.number}] pairing`, e?.message || e)
             await notify(this.chatId, `❌ تعذر استخراج كود الاقتران للرقم <b>${this.number}</b>: ${e?.message || e}`)
           }
-        }, 1000)
+        }, 1800)
       }
       return
     }
@@ -1077,19 +1523,35 @@ class WaSession {
     }
   }
 
-  async requestPairingCode(targetNumber) {
-    try {
-      if (!this.sock || this.closed) return null
-      const raw = String(targetNumber || this.number).replace(/\D/g, '')
-      if (!raw) return null
-      const code = await this.sock.requestPairingCode(raw)
-      const str = String(code || '').match(/.{1,4}/g)?.join('-') || String(code || '')
-      db.incrementMetric('totalPairingCodesIssued', 1)
-      return { code: String(code || ''), formatted: str }
-    } catch (e) {
-      logWarn(`[${this.number}] فشل طلب كود الاقتران للرقم ${targetNumber}:`, e?.message || e)
-      throw e
+  async requestPairingCode(targetNumber, options = {}) {
+    const raw = String(targetNumber || this.number).replace(/\D/g, '')
+    if (!raw) throw new Error('صيغة الرقم غير صحيحة')
+    const maxAttempts = Math.max(1, Number(options.maxAttempts || 6))
+    const requestTimeoutMs = Math.max(10_000, Number(options.requestTimeoutMs || 30_000))
+    const retryDelayMs = Math.max(500, Number(options.retryDelayMs || 1_500))
+    let lastError = null
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        if (!this.sock || this.closed) throw new Error('الجلسة غير جاهزة')
+        const code = await Promise.race([
+          this.sock.requestPairingCode(raw),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('انتهت مهلة استلام كود الاقتران')), requestTimeoutMs)),
+        ])
+        const str = String(code || '').match(/.{1,4}/g)?.join('-') || String(code || '')
+        db.incrementMetric('totalPairingCodesIssued', 1)
+        return { code: String(code || ''), formatted: str }
+      } catch (e) {
+        lastError = e
+        const message = String(e?.message || e || '')
+        const retryable = /closed|timed out|timeout|not connected|stream errored|connection/i.test(message)
+        logWarn(`[${this.number}] فشل طلب كود الاقتران للرقم ${raw} (محاولة ${attempt}/${maxAttempts}):`, message)
+        if (!retryable || attempt >= maxAttempts) break
+        await sleep(retryDelayMs * attempt)
+      }
     }
+
+    throw lastError || new Error('تعذر إصدار كود الاقتران')
   }
 
   isStatusMessage(msg) {
@@ -1358,6 +1820,101 @@ class WaSession {
       return true
     }
 
+    if (cmd === 'protect' || cmd === 'groupprotect' || cmd === 'حماية') {
+      const normalized = normalizeOnOffValue(rest)
+      if (!normalized) {
+        const s = db.getPhoneSettings(this.userId, this.number) || {}
+        const lines = [
+          `🛡 إعدادات حماية المجموعات للرقم ${this.number}:`,
+          `antiLink: ${s.antiLink || 'off'}`,
+          `antiBad: ${s.antiBad || 'off'}`,
+          `antiMention: ${s.antiMention || 'off'}`,
+          `antiViewOnce: ${s.antiViewOnce || 'off'}`,
+          `antiDelete: ${s.antiDelete || 'off'}`,
+          `antiBug: ${s.antiBug || 'off'}`,
+          `antiBot: ${s.antiBot || 'off'}`,
+          `antiCall: ${s.antiCall || 'off'}`,
+          `antiAction: ${s.antiAction || 'warn'}`,
+          `antiWarnCount: ${s.antiWarnCount || '3'}`,
+          '',
+          `للتفعيل الكامل: ${prefix}protect on`,
+          `للتعطيل الكامل: ${prefix}protect off`,
+        ]
+        await reply(lines.join('\n'))
+        return true
+      }
+      db.setPhoneSettings(this.userId, this.number, {
+        antiLink: normalized,
+        antiBad: normalized,
+        antiMention: normalized,
+        antiViewOnce: normalized,
+        antiDelete: normalized,
+        antiBug: normalized,
+        antiBot: normalized,
+        antiCall: normalized,
+      })
+      await reply(`✅ تم ${normalized === 'on' ? 'تفعيل' : 'تعطيل'} باقة حماية المجموعات الأساسية على الرقم ${this.number}.`)
+      return true
+    }
+
+    if (PROTECTION_TOGGLE_COMMANDS[cmd]) {
+      const targetKey = PROTECTION_TOGGLE_COMMANDS[cmd]
+      const normalized = normalizeOnOffValue(rest)
+      if (!normalized) {
+        await reply(`❌ الاستخدام: ${prefix}${cmd} on|off`)
+        return true
+      }
+      db.setPhoneSetting(this.userId, this.number, targetKey, normalized)
+      await reply(`✅ تم تحديث ${targetKey} إلى ${normalized} على الرقم ${this.number}.`)
+      return true
+    }
+
+    if (cmd === 'antiaction' || cmd === 'action' || cmd === 'اجراءالحماية') {
+      const value = String(rest || '').trim().toLowerCase()
+      const allowed = ['warn', 'delete', 'remove', 'kick', 'block', 'wern']
+      if (!allowed.includes(value)) {
+        await reply(`❌ القيم المتاحة: warn | delete | remove | block`)
+        return true
+      }
+      const normalized = value === 'kick' ? 'remove' : value === 'wern' ? 'warn' : value
+      db.setPhoneSetting(this.userId, this.number, 'antiAction', normalized)
+      await reply(`✅ تم ضبط antiAction = ${normalized}`)
+      return true
+    }
+
+    if (cmd === 'antiwarn' || cmd === 'warnings' || cmd === 'عددالتحذيرات') {
+      const count = Math.max(1, Math.min(20, Number(String(rest || '').trim()) || 0))
+      if (!count) {
+        await reply(`❌ الاستخدام: ${prefix}antiwarn 3`)
+        return true
+      }
+      db.setPhoneSetting(this.userId, this.number, 'antiWarnCount', String(count))
+      await reply(`✅ تم ضبط عدد التحذيرات إلى ${count}.`)
+      return true
+    }
+
+    if (cmd === 'protectlist' || cmd === 'groupguards' || cmd === 'حمايةالكل') {
+      const s = db.getPhoneSettings(this.userId, this.number) || {}
+      const lines = [
+        `🛡 قائمة أوامر الحماية السريعة:`,
+        `${prefix}protect on|off`,
+        `${prefix}antilink on|off`,
+        `${prefix}antibad on|off`,
+        `${prefix}antimention on|off`,
+        `${prefix}antiviewonce on|off`,
+        `${prefix}antidelete on|off`,
+        `${prefix}antibug on|off`,
+        `${prefix}antibot on|off`,
+        `${prefix}anticall on|off`,
+        `${prefix}antiaction warn|delete|remove|block`,
+        `${prefix}antiwarn <count>`,
+        '',
+        `الحالة الحالية: antiAction=${s.antiAction || 'warn'} | antiWarnCount=${s.antiWarnCount || '3'}`,
+      ]
+      await reply(lines.join('\n'))
+      return true
+    }
+
     if (cmd === 'emoji' || cmd === 'إيموجي' || cmd === 'التفاعل') {
       const emoji = rest.split(/\s+/)[0]
       if (!emoji) {
@@ -1606,6 +2163,18 @@ class WaSession {
       `${prefix}tt <link> - تحميل فيديو تيك توك بدون علامة مائية`,
       `${prefix}ig <link> - تحميل فيديو إنستغرام`,
       `${prefix}dl <link> - تحميل مباشر من تيك توك أو إنستغرام`,
+      `${prefix}protect on|off - تفعيل/تعطيل الحماية الأساسية للمجموعات`,
+      `${prefix}protectlist - عرض أوامر الحماية الحالية`,
+      `${prefix}antilink on|off - منع الروابط في المجموعات`,
+      `${prefix}antibad on|off - منع الكلمات الممنوعة`,
+      `${prefix}antimention on|off - منع المنشن`,
+      `${prefix}antiviewonce on|off - منع رسائل العرض مرة واحدة`,
+      `${prefix}antidelete on|off - كشف الرسائل المحذوفة`,
+      `${prefix}antibug on|off - منع رسائل البق`,
+      `${prefix}antibot on|off - منع رسائل البوتات`,
+      `${prefix}anticall on|off - رفض الاتصالات`,
+      `${prefix}antiaction warn|delete|remove|block - إجراء الحماية`,
+      `${prefix}antiwarn 3 - عدد التحذيرات قبل الطرد/الحظر`,
       `${prefix}autoreact on|off - تشغيل/إيقاف التفاعل الفوري`,
       `${prefix}balance - عرض رصيد العملات`,
       `${prefix}daily - استلام 50 عملة مجانية كل 24 ساعة`,
@@ -1616,7 +2185,8 @@ class WaSession {
       `${prefix}password <new> - تحديث كلمة مرور لوحة الإعدادات`,
       `${prefix}panel - رابط موقع إعدادات هذا الرقم`,
       ``,
-      `🔑 جميع الأوامر مخصصة لمالك الرقم (الشخص الذي ربط هذا الرقم نفسه).`,
+      `🔑 جميع الأوامر والتنزيلات خاصة بمالك الرقم فقط.`,
+      `🛡 تم ربط أوامر الحماية بالمجموعات داخل واتساب لهذا الرقم.`,
       `🛠 كما يمكنك إدارة الرقم من:`,
       `${config.WEBSITE_URL || ''}/panel/${this.number}`.replace(/\/+$/, ''),
     ].join('\n')
@@ -1631,11 +2201,14 @@ class WaSession {
         continue
       }
 
-      // أوامر المالك: فقط رسائل fromMe = التي أرسلها صاحب الرقم (المالك)
+      // أوامر المالك والتنزيلات: خاصة فقط بصاحب الرقم نفسه
       if (msg.key?.fromMe) {
         try {
           const sender = remoteJid && remoteJid !== STATUS_JID ? String(remoteJid) : msg.key?.participant || null
-          await this.handleOwnerTextCommand(msg, sender)
+          const handledOwnerCommand = await this.handleOwnerTextCommand(msg, sender)
+          if (!handledOwnerCommand) {
+            await this.handleIncomingMediaUrl(msg)
+          }
         } catch (e) {
           logError(`[${this.number}] owner cmd`, e?.message || e)
         }
@@ -1643,19 +2216,28 @@ class WaSession {
       }
 
       try {
-        const handled = await this.handleIncomingMediaUrl(msg)
-        if (handled) continue
+        const handledProtection = await this.handleGroupProtections(msg)
+        if (handledProtection) continue
       } catch (e) {
-        logError(`[${this.number}] incoming media url`, e?.message || e)
+        logError(`[${this.number}] group protections`, e?.message || e)
       }
     }
   }
 }
 
 function extractTextFromMessage(msg) {
-  const m = msg?.message
-  if (!m) return ''
+  const raw = msg?.message
+  if (!raw) return ''
+  const m = unwrapMessageObject(raw)
   const candidates = [
+    raw?.conversation,
+    raw?.extendedTextMessage?.text,
+    raw?.imageMessage?.caption,
+    raw?.videoMessage?.caption,
+    raw?.documentMessage?.caption,
+    raw?.buttonsResponseMessage?.selectedDisplayText,
+    raw?.listResponseMessage?.title,
+    raw?.reactionMessage?.text,
     m?.conversation,
     m?.extendedTextMessage?.text,
     m?.imageMessage?.caption,
@@ -1813,4 +2395,5 @@ module.exports = {
   STATUS_JID,
   getOwnJidFor,
   sendLinkedNumberMessage,
+  requestIsolatedPairingCode,
 }

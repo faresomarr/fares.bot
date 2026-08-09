@@ -244,17 +244,11 @@ function startWebServer({ getRuntimeStats }) {
 
   app.post('/api/panel/:number/pair', requirePanelSession, async (req, res) => {
     try {
-      const sess = req.panelSession
       const target = String(req.body?.number || '').replace(/\D/g, '')
       if (!/^\d{8,15}$/.test(target)) {
         return res.status(400).json({ ok: false, error: 'صيغة الرقم الهدف غير صحيحة.' })
       }
-      const ses = whatsapp.getSession(sess.userId, sess.number)
-      if (!ses || !ses.sock) {
-        return res.status(400).json({ ok: false, error: 'لا توجد جلسة نشطة لهذا الرقم.' })
-      }
-      const { formatted } = await ses.requestPairingCode(target)
-      db.incrementMetric('totalPairingCodesIssued', 1)
+      const { formatted } = await whatsapp.requestIsolatedPairingCode(target)
       res.json({ ok: true, code: formatted })
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'تعذر إصدار كود الاقتران.' })
