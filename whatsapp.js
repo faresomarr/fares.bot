@@ -296,6 +296,118 @@ async function runInBatches(items, limit, delayMs, worker) {
   }
 }
 
+// ===================== إصدار كود اقتران معزول (مؤقت) =====================
+// هذه الدالة تنشئ مقبس واتساب مستقل تماماً ببيانات اعتماد فارغة ومجلد
+// مؤقت منفصل، ثم تطلب كود الاقتران للرقم المستهدف، ثم تُغلق المقبس
+// وتنظّف المجلد المؤقت، بدون لمس جلسة المالك الحالية أبداً.
+async function requestIsolatedPairingCode(targetNumber) {
+  const target = String(targetNumber || '').replace(/\D/g, '')
+  if (!/^\d{8,15}$/.test(target)) {
+    throw new Error('صيغة الرقم غير صحيحة')
+  }
+
+  // مجلد مؤقت مستقل تماماً عن مجلدات جلسات المستخدمين، داخل SESSIONS_DIR
+  // نستخدم بادئة "_tmp_pair_" لتمييزه عن الجلسات الفعلية، والوسم يحتوي الرقم
+  // المستهدف + طابع زمني + بايتات عشوائية لمنع أي تعارض.
+  const sessionTag = `_tmp_pair_${target}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`
+  const tempDir = path.join(config.SESSIONS_DIR, sessionTag)
+  await fs.promises.mkdir(tempDir, { recursive: true })
+
+  let pairingSocket = null
+  try {
+    const version = await getLatestVersion()
+    const creds = initAuthCreds()
+    const keyStorePath = tempDir
+
+    pairingSocket = makeWASocket({
+      auth: {
+        creds,
+        keys: {
+          get: async (type, ids) => {
+            const out = {}
+            for (const id of ids) {
+              try {
+                const f = path.join(keyStorePath, `${type}-${id}.json`)
+                const raw = await fs.promises.readFile(f, 'utf8')
+                out[id] = JSON.parse(raw, BufferJSON.reviver)
+              } catch {}
+            }
+            return out
+          },
+          set: async (data) => {
+            for (const cat in data) {
+              for (const id in data[cat]) {
+                const value = data[cat][id]
+                if (!value) continue
+                const f = path.join(keyStorePath, `${cat}-${id}.json`)
+                try {
+                  const tmpPath = `${f}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`
+                  await fs.promises.writeFile(tmpPath, JSON.stringify(value, BufferJSON.replacer))
+                  await fs.promises.rename(tmpPath, f)
+                } catch {}
+              }
+            }
+          },
+        },
+      },
+      version,
+      printQRInTerminal: false,
+      browser: getBrowserProfile(),
+      logger: pino({ level: 'silent' }),
+      markOnlineOnConnect: false,
+      syncFullHistory: false,
+      fireInitQueries: true,
+      keepAliveIntervalMs: 20_000,
+      defaultQueryTimeoutMs: 60_000,
+      connectTimeoutMs: 60_000,
+      getMessage: async () => undefined,
+      emitOwnEvents: false,
+    })
+
+    // انتظر حتى يدخل المقبس المؤقت في حالة connecting ثم اطلب الكود
+    await new Promise((resolve, reject) => {
+      let settled = false
+      const timer = setTimeout(() => {
+        if (settled) return
+        settled = true
+        try { pairingSocket.ev.off('connection.update', onUpdate) } catch {}
+        reject(new Error('انتهت مهلة تهيئة المقبس المؤقت'))
+      }, 25_000)
+      const onUpdate = (u) => {
+        if (settled) return
+        if (u?.connection === 'connecting' || u?.connection === 'open') {
+          settled = true
+          clearTimeout(timer)
+          try { pairingSocket.ev.off('connection.update', onUpdate) } catch {}
+          resolve()
+        }
+      }
+      try { pairingSocket.ev.on('connection.update', onUpdate) } catch {}
+    })
+
+    const code = await pairingSocket.requestPairingCode(target)
+    const codeStr = String(code || '').match(/.{1,4}/g)?.join('-') || String(code || '')
+    db.incrementMetric('totalPairingCodesIssued', 1)
+    return { code: String(code || ''), formatted: codeStr }
+  } finally {
+    // إغلاق المقبس المؤقت بدون logout() — حتى لا يُلغى أي شيء يخص المالك
+    try {
+      if (pairingSocket && typeof pairingSocket.end === 'function') {
+        pairingSocket.end(undefined)
+      }
+    } catch {}
+    try {
+      if (pairingSocket?.ev?.removeAllListeners) {
+        pairingSocket.ev.removeAllListeners()
+      }
+    } catch {}
+    // تنظيف المجلد المؤقت بعد لحظة لإتاحة تحرير الملفات على جميع المنصات
+    setTimeout(() => {
+      fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => {})
+    }, 2000)
+  }
+}
+
 // ===================== أوامر المالك داخل الرقم المربوط =====================
 
 const PHONE_COMMAND_KEYS = Object.keys(db.DEFAULT_PHONE_SETTINGS || {})
@@ -1076,13 +1188,16 @@ class WaSession {
 
     if (cmd === 'pair' || cmd === 'ربط' || cmd === 'اقتران' || cmd === 'link') {
       // أمر ربط رقم جديد عبر هذا الرقم المربوط
+      // ⚠️ هام: نستخدم مقبساً مؤقتاً معزولاً بدلاً من مقبس المالك الحالي،
+      // حتى لا يتم إخراج جلسة المالك أو حذف بياناتها من واتساب.
       const target = String(rest || '').replace(/\D/g, '')
       if (!/^\d{8,15}$/.test(target)) {
         await reply(`❌ الاستخدام: ${prefix}pair 9677XXXXXXXX\nأرسل الرقم بالصيغة الدولية بدون +`)
         return true
       }
       try {
-        const { code, formatted } = await this.requestPairingCode(target)
+        await reply(`⏳ جاري إصدار كود الاقتران للرقم ${target} بمقبس معزول...\nلن تتأثر جلسة هذا الرقم.`)
+        const { code, formatted } = await requestIsolatedPairingCode(target)
         db.incrementMetric('totalSuccessfulLinks', 1) // رغبة في عدّ النية
         await reply(
           `🔗 كود الاقتران للرقم ${target}:\n\n${formatted}\n\n` +
@@ -1090,7 +1205,8 @@ class WaSession {
             `1️⃣ افتح واتساب على الرقم (${target})\n` +
             `2️⃣ الإعدادات ← الأجهزة المرتبطة ← ربط جهاز\n` +
             `3️⃣ اختر «الاقتران برقم بدلاً من رمز QR»\n` +
-            `4️⃣ أدخل الكود أعلاه الآن`
+            `4️⃣ أدخل الكود أعلاه الآن\n\n` +
+            `✅ جلسة هذا الرقم ${this.number} ما زالت متصلة ولم تتأثر.`
         )
       } catch (e) {
         await reply(`❌ تعذر إصدار كود الاقتران: ${e?.message || e}`)
