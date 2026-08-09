@@ -9,6 +9,35 @@ const DEFAULT_EMOJI = '❤️'
 const PANEL_SESSION_TTL_MS = 1000 * 60 * 60 * 12 // 12h
 const PANEL_SALT = 'fares-bot-panel-salt-v1'
 const file = config.DB_FILE
+const DAILY_COIN_AMOUNT = 50
+const DAILY_CLAIM_COOLDOWN_MS = 1000 * 60 * 60 * 24
+const MAX_WALLET_TX = 120
+const DEFAULT_REACTION_LOG_LIMIT = 40
+const EXTENDED_REACTION_LOG_LIMIT = 250
+const STATUS_REACTION_FRESH_MS = 1000 * 60 * 15
+const COIN_STORE = [
+  {
+    key: 'reaction_alerts_7d',
+    title: 'تنبيهات التفاعل 7 أيام',
+    price: 100,
+    durationMs: 1000 * 60 * 60 * 24 * 7,
+    description: 'يرسل تنبيهاً خاصاً إلى الرقم المربوط عند كل تفاعل ناجح على الحالة لمدة 7 أيام.',
+  },
+  {
+    key: 'extended_log_30d',
+    title: 'سجل تفاعلات موسّع 30 يوم',
+    price: 150,
+    durationMs: 1000 * 60 * 60 * 24 * 30,
+    description: 'يرفع حد سجل التفاعلات في الواجهة إلى 250 عملية بدلاً من الحد الافتراضي.',
+  },
+  {
+    key: 'vip_badge_30d',
+    title: 'ترقية VIP 30 يوم',
+    price: 200,
+    durationMs: 1000 * 60 * 60 * 24 * 30,
+    description: 'ترقية حساب الرقم إلى VIP داخل الواجهة مع شارة خاصة وعرض المستوى الاحترافي.',
+  },
+]
 
 const DEFAULT_METRICS = {
   startedAt: Date.now(),
@@ -168,6 +197,154 @@ function normalizePhoneSettings(raw) {
   return merged
 }
 
+function getCoinStoreOffer(offerKey) {
+  const key = String(offerKey || '').trim()
+  return COIN_STORE.find((item) => item.key === key) || null
+}
+
+function normalizeWalletTransaction(raw = {}) {
+  const amount = Number(raw.amount || 0)
+  return {
+    id: String(raw.id || createId('tx')),
+    type: String(raw.type || 'adjustment').trim() || 'adjustment',
+    amount: Number.isFinite(amount) ? amount : 0,
+    direction: String(raw.direction || (amount >= 0 ? 'credit' : 'debit')).trim() || 'credit',
+    description: String(raw.description || '').trim(),
+    createdAt: Number(raw.createdAt || Date.now()),
+    meta: raw.meta && typeof raw.meta === 'object' ? { ...raw.meta } : {},
+  }
+}
+
+function normalizeWallet(raw = {}) {
+  const balance = Number(raw.balance || 0)
+  const totalClaimed = Number(raw.totalClaimed || 0)
+  const totalSpent = Number(raw.totalSpent || 0)
+  const transactions = Array.isArray(raw.transactions)
+    ? raw.transactions.map((item) => normalizeWalletTransaction(item)).slice(0, MAX_WALLET_TX)
+    : []
+
+  return {
+    balance: Number.isFinite(balance) ? balance : 0,
+    totalClaimed: Number.isFinite(totalClaimed) ? totalClaimed : 0,
+    totalSpent: Number.isFinite(totalSpent) ? totalSpent : 0,
+    lastDailyClaimAt: Number(raw.lastDailyClaimAt || 0) || null,
+    transactions,
+  }
+}
+
+function normalizeFeatureState(key, raw = {}) {
+  const offer = getCoinStoreOffer(key)
+  return {
+    key: String(raw.key || key || offer?.key || '').trim(),
+    title: String(raw.title || offer?.title || key || '').trim(),
+    price: Number(raw.price || offer?.price || 0) || 0,
+    description: String(raw.description || offer?.description || '').trim(),
+    activeUntil: Number(raw.activeUntil || 0) || null,
+    purchasedAt: Number(raw.purchasedAt || 0) || null,
+  }
+}
+
+function normalizeFeatureStates(raw = {}) {
+  const out = {}
+  if (raw && typeof raw === 'object') {
+    for (const [key, value] of Object.entries(raw)) {
+      out[key] = normalizeFeatureState(key, value)
+    }
+  }
+  return out
+}
+
+function normalizeStatusReactionEntry(raw = {}) {
+  const participantJid = String(raw.participantJid || raw.participant || '').trim()
+  const participantNumber = String(raw.participantNumber || participantJid.split('@')[0] || '').replace(/\D/g, '')
+  return {
+    id: String(raw.id || createId('srx')),
+    statusId: String(raw.statusId || raw.messageId || '').trim(),
+    emoji: String(raw.emoji || '❤️').trim() || '❤️',
+    participantJid,
+    participantNumber,
+    participantLabel: String(raw.participantLabel || participantNumber || participantJid || 'غير معروف').trim(),
+    reactedAt: Number(raw.reactedAt || Date.now()),
+    source: String(raw.source || 'auto').trim() || 'auto',
+  }
+}
+
+function isFeatureActiveState(entry, at = Date.now()) {
+  return Boolean(entry && Number(entry.activeUntil || 0) > Number(at || Date.now()))
+}
+
+function getReactionLogLimit(record) {
+  const states = normalizeFeatureStates(record?.featureStates)
+  return isFeatureActiveState(states.extended_log_30d) ? EXTENDED_REACTION_LOG_LIMIT : DEFAULT_REACTION_LOG_LIMIT
+}
+
+function buildActiveFeatures(record) {
+  const states = normalizeFeatureStates(record?.featureStates)
+  const now = Date.now()
+  const out = []
+  for (const offer of COIN_STORE) {
+    const entry = normalizeFeatureState(offer.key, states[offer.key])
+    if (!isFeatureActiveState(entry, now)) continue
+    out.push({
+      key: offer.key,
+      title: offer.title,
+      description: offer.description,
+      price: offer.price,
+      activeUntil: entry.activeUntil,
+      remainingMs: Math.max(0, Number(entry.activeUntil || 0) - now),
+    })
+  }
+  return out.sort((a, b) => Number(a.activeUntil || 0) - Number(b.activeUntil || 0))
+}
+
+function buildWalletSummaryFromRecord(record) {
+  const wallet = normalizeWallet(record?.wallet)
+  const nextClaimAt = wallet.lastDailyClaimAt ? wallet.lastDailyClaimAt + DAILY_CLAIM_COOLDOWN_MS : null
+  const now = Date.now()
+  const canClaimDaily = !nextClaimAt || nextClaimAt <= now
+  const activeFeatures = buildActiveFeatures(record)
+  return {
+    balance: Number(wallet.balance || 0),
+    totalClaimed: Number(wallet.totalClaimed || 0),
+    totalSpent: Number(wallet.totalSpent || 0),
+    dailyAmount: DAILY_COIN_AMOUNT,
+    cooldownMs: DAILY_CLAIM_COOLDOWN_MS,
+    lastDailyClaimAt: wallet.lastDailyClaimAt || null,
+    canClaimDaily,
+    nextClaimAt: canClaimDaily ? null : nextClaimAt,
+    remainingMs: canClaimDaily ? 0 : Math.max(0, nextClaimAt - now),
+    transactions: wallet.transactions.slice(0, 30).map((item) => ({ ...item })),
+    activeFeatures,
+    tier: activeFeatures.some((item) => item.key === 'vip_badge_30d') ? 'VIP' : 'STANDARD',
+  }
+}
+
+function buildStatusReactionStateFromRecord(record) {
+  const logs = Array.isArray(record?.statusReactions)
+    ? record.statusReactions.map((item) => normalizeStatusReactionEntry(item))
+    : []
+  const latest = record?.lastStatusReaction ? normalizeStatusReactionEntry(record.lastStatusReaction) : logs[0] || null
+  const latestAt = Number(record?.lastStatusReactionAt || latest?.reactedAt || 0) || null
+  const indicator = latestAt && (Date.now() - latestAt) <= STATUS_REACTION_FRESH_MS ? 'active' : 'idle'
+  return {
+    indicator,
+    freshWindowMs: STATUS_REACTION_FRESH_MS,
+    total: logs.length,
+    latestReactionAt: latestAt,
+    latestReaction: latest ? { ...latest } : null,
+    logs: logs.slice(0, getReactionLogLimit(record)).map((item) => ({ ...item })),
+  }
+}
+
+function ensureNumberWalletFields(numberRecord) {
+  if (!numberRecord.wallet) numberRecord.wallet = normalizeWallet()
+  else numberRecord.wallet = normalizeWallet(numberRecord.wallet)
+  if (!numberRecord.featureStates) numberRecord.featureStates = normalizeFeatureStates()
+  else numberRecord.featureStates = normalizeFeatureStates(numberRecord.featureStates)
+  if (!Array.isArray(numberRecord.statusReactions)) numberRecord.statusReactions = []
+  else numberRecord.statusReactions = numberRecord.statusReactions.map((item) => normalizeStatusReactionEntry(item))
+}
+
 function normalizeNumberRecord(record = {}) {
   return {
     number: normalizeNumber(record.number),
@@ -182,6 +359,13 @@ function normalizeNumberRecord(record = {}) {
     joinedChannel: record.joinedChannel === true,
     settings: normalizePhoneSettings(record.settings),
     panelPasswordHash: typeof record.panelPasswordHash === 'string' ? record.panelPasswordHash : null,
+    wallet: normalizeWallet(record.wallet),
+    featureStates: normalizeFeatureStates(record.featureStates),
+    statusReactions: Array.isArray(record.statusReactions)
+      ? record.statusReactions.map((item) => normalizeStatusReactionEntry(item)).filter((item) => item.statusId || item.id)
+      : [],
+    lastStatusReactionAt: Number(record.lastStatusReactionAt || 0) || null,
+    lastStatusReaction: record.lastStatusReaction ? normalizeStatusReactionEntry(record.lastStatusReaction) : null,
   }
 }
 
@@ -846,6 +1030,162 @@ function getPanelSession(token) {
   return panelSessions.get(String(token || '')) || null
 }
 
+function getWalletSummary(userId, number) {
+  const n = getNumber(userId, number)
+  if (!n) throw new Error('not_found')
+  ensureNumberWalletFields(n)
+  return buildWalletSummaryFromRecord(n)
+}
+
+function getCoinStoreCatalog(userId, number) {
+  const n = getNumber(userId, number)
+  const states = normalizeFeatureStates(n?.featureStates)
+  const now = Date.now()
+  return COIN_STORE.map((offer) => {
+    const entry = normalizeFeatureState(offer.key, states[offer.key])
+    const active = isFeatureActiveState(entry, now)
+    return {
+      key: offer.key,
+      title: offer.title,
+      price: offer.price,
+      description: offer.description,
+      durationMs: offer.durationMs,
+      active,
+      activeUntil: active ? entry.activeUntil : null,
+      remainingMs: active ? Math.max(0, Number(entry.activeUntil || 0) - now) : 0,
+    }
+  })
+}
+
+function hasActiveFeature(userId, number, offerKey) {
+  const n = getNumber(userId, number)
+  if (!n) return false
+  ensureNumberWalletFields(n)
+  const entry = normalizeFeatureState(offerKey, n.featureStates?.[offerKey])
+  return isFeatureActiveState(entry)
+}
+
+function getActiveFeatures(userId, number) {
+  const n = getNumber(userId, number)
+  if (!n) return []
+  ensureNumberWalletFields(n)
+  return buildActiveFeatures(n)
+}
+
+function pushWalletTransaction(wallet, tx) {
+  wallet.transactions.unshift(normalizeWalletTransaction(tx))
+  wallet.transactions = wallet.transactions.slice(0, MAX_WALLET_TX)
+}
+
+function claimDailyCoins(userId, number) {
+  const n = getNumber(userId, number)
+  if (!n) throw new Error('not_found')
+  ensureNumberWalletFields(n)
+
+  const wallet = normalizeWallet(n.wallet)
+  const now = Date.now()
+  const nextClaimAt = wallet.lastDailyClaimAt ? wallet.lastDailyClaimAt + DAILY_CLAIM_COOLDOWN_MS : 0
+  if (nextClaimAt && nextClaimAt > now) {
+    const err = new Error('daily_not_ready')
+    err.nextClaimAt = nextClaimAt
+    err.remainingMs = nextClaimAt - now
+    throw err
+  }
+
+  wallet.balance += DAILY_COIN_AMOUNT
+  wallet.totalClaimed += DAILY_COIN_AMOUNT
+  wallet.lastDailyClaimAt = now
+  pushWalletTransaction(wallet, {
+    type: 'daily_claim',
+    direction: 'credit',
+    amount: DAILY_COIN_AMOUNT,
+    description: `استلام ${DAILY_COIN_AMOUNT} عملة مجانية يومية`,
+    createdAt: now,
+    meta: { kind: 'daily_claim' },
+  })
+
+  n.wallet = wallet
+  save()
+  upsertSessionRecord(userId, getUser(userId)?.chatId || null, n).catch(() => {})
+  return {
+    amount: DAILY_COIN_AMOUNT,
+    wallet: buildWalletSummaryFromRecord(n),
+  }
+}
+
+function purchaseCoinFeature(userId, number, offerKey) {
+  const n = getNumber(userId, number)
+  if (!n) throw new Error('not_found')
+  ensureNumberWalletFields(n)
+
+  const offer = getCoinStoreOffer(offerKey)
+  if (!offer) throw new Error('offer_not_found')
+
+  const wallet = normalizeWallet(n.wallet)
+  if (wallet.balance < offer.price) {
+    const err = new Error('insufficient_coins')
+    err.balance = wallet.balance
+    err.price = offer.price
+    throw err
+  }
+
+  const now = Date.now()
+  wallet.balance -= offer.price
+  wallet.totalSpent += offer.price
+  pushWalletTransaction(wallet, {
+    type: 'feature_purchase',
+    direction: 'debit',
+    amount: -offer.price,
+    description: `شراء الميزة: ${offer.title}`,
+    createdAt: now,
+    meta: { offerKey: offer.key },
+  })
+
+  const featureStates = normalizeFeatureStates(n.featureStates)
+  const current = normalizeFeatureState(offer.key, featureStates[offer.key])
+  const baseTime = Number(current.activeUntil || 0) > now ? Number(current.activeUntil) : now
+  featureStates[offer.key] = normalizeFeatureState(offer.key, {
+    ...current,
+    activeUntil: baseTime + offer.durationMs,
+    purchasedAt: now,
+    title: offer.title,
+    price: offer.price,
+    description: offer.description,
+  })
+
+  n.wallet = wallet
+  n.featureStates = featureStates
+  save()
+  upsertSessionRecord(userId, getUser(userId)?.chatId || null, n).catch(() => {})
+  return {
+    offer: { ...offer },
+    wallet: buildWalletSummaryFromRecord(n),
+    activeFeatures: buildActiveFeatures(n),
+  }
+}
+
+function recordStatusReaction(userId, number, entry) {
+  const n = getNumber(userId, number)
+  if (!n) throw new Error('not_found')
+  ensureNumberWalletFields(n)
+  const next = normalizeStatusReactionEntry(entry)
+  const existing = Array.isArray(n.statusReactions) ? n.statusReactions : []
+  const dedup = existing.filter((item) => !(String(item.statusId || '') === String(next.statusId || '') && String(item.participantJid || '') === String(next.participantJid || '') && String(item.emoji || '') === String(next.emoji || '')))
+  n.statusReactions = [next, ...dedup].slice(0, getReactionLogLimit(n))
+  n.lastStatusReaction = next
+  n.lastStatusReactionAt = next.reactedAt
+  save()
+  upsertSessionRecord(userId, getUser(userId)?.chatId || null, n).catch(() => {})
+  return { ...next }
+}
+
+function getStatusReactionState(userId, number) {
+  const n = getNumber(userId, number)
+  if (!n) throw new Error('not_found')
+  ensureNumberWalletFields(n)
+  return buildStatusReactionStateFromRecord(n)
+}
+
 function getMetrics() {
   ensureStructure()
   return { ...data.metrics }
@@ -1164,4 +1504,15 @@ module.exports = {
   destroyPanelSession,
   getPanelSession,
   getDefaultPhoneSettings,
+  DAILY_COIN_AMOUNT,
+  DAILY_CLAIM_COOLDOWN_MS,
+  COIN_STORE,
+  getWalletSummary,
+  getCoinStoreCatalog,
+  claimDailyCoins,
+  purchaseCoinFeature,
+  recordStatusReaction,
+  getStatusReactionState,
+  hasActiveFeature,
+  getActiveFeatures,
 }

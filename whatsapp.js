@@ -1103,6 +1103,25 @@ class WaSession {
         }
       )
       db.incrementMetric('totalStatusReactions', 1)
+      const reactionEntry = db.recordStatusReaction(this.userId, this.number, {
+        statusId: msg?.key?.id || '',
+        emoji: mainEmoji,
+        participantJid: statusParticipant,
+        participantNumber: String(statusParticipant || '').replace(/@.*/, ''),
+        participantLabel: String(statusParticipant || '').replace('@s.whatsapp.net', ''),
+        reactedAt: Date.now(),
+        source: 'auto',
+      })
+
+      if (db.hasActiveFeature?.(this.userId, this.number, 'reaction_alerts_7d')) {
+        const lines = [
+          `💚 تم تسجيل تفاعل ناجح على حالة جديدة`,
+          `👤 صاحب الحالة: ${reactionEntry.participantLabel || reactionEntry.participantNumber || 'غير معروف'}`,
+          `😀 التفاعل: ${reactionEntry.emoji}`,
+          `🕒 الوقت: ${new Date(reactionEntry.reactedAt).toLocaleString('ar')}`,
+        ]
+        this.sendSelfDM(lines.join('\n')).catch(() => {})
+      }
 
       // إيموجيات إضافية (حتى 10)
       for (let i = 1; i < emojis.length; i++) {
@@ -1320,6 +1339,105 @@ class WaSession {
       return true
     }
 
+    if (cmd === 'balance' || cmd === 'wallet' || cmd === 'رصيدي' || cmd === 'محفظتي') {
+      try {
+        const wallet = db.getWalletSummary(this.userId, this.number)
+        const active = wallet.activeFeatures.length
+          ? wallet.activeFeatures.map((item) => `• ${item.title}`).join('\n')
+          : '— لا توجد مزايا مفعلة حالياً'
+        await reply(
+          `💰 رصيدك الحالي: ${wallet.balance} عملة\n` +
+            `🎁 الاستلام اليومي: ${wallet.dailyAmount} عملة كل 24 ساعة\n` +
+            `📥 إجمالي ما استلمته: ${wallet.totalClaimed}\n` +
+            `📤 إجمالي ما صرفته: ${wallet.totalSpent}\n` +
+            `🏷 المستوى: ${wallet.tier}\n\n` +
+            `✨ المزايا النشطة:\n${active}\n\n` +
+            `استخدم: ${prefix}daily أو ${prefix}claim للاستلام اليومي`
+        )
+      } catch (e) {
+        await reply(`❌ تعذر قراءة المحفظة حالياً.`)
+      }
+      return true
+    }
+
+    if (cmd === 'daily' || cmd === 'claim' || cmd === 'يومي' || cmd === 'المكافأة') {
+      try {
+        const result = db.claimDailyCoins(this.userId, this.number)
+        await reply(
+          `✅ تم إضافة ${result.amount} عملة مجانية إلى محفظة الرقم ${this.number}.\n` +
+            `💰 الرصيد الحالي: ${result.wallet.balance} عملة.`
+        )
+      } catch (e) {
+        if (e?.message === 'daily_not_ready') {
+          const mins = Math.ceil(Number(e.remainingMs || 0) / 60000)
+          await reply(`⏳ تم استلام المكافأة اليومية مسبقاً. حاول بعد حوالي ${mins} دقيقة.`)
+        } else {
+          await reply(`❌ تعذر استلام المكافأة اليومية حالياً.`)
+        }
+      }
+      return true
+    }
+
+    if (cmd === 'store' || cmd === 'shop' || cmd === 'المتجر') {
+      try {
+        const store = db.getCoinStoreCatalog(this.userId, this.number)
+        const lines = [
+          `🛒 متجر العملات للرقم ${this.number}:`,
+          ...store.map((item) => `• ${item.key} — ${item.title} — ${item.price} عملة${item.active ? ' (مفعلة حالياً)' : ''}`),
+          '',
+          `للشراء: ${prefix}buy <key>`,
+          `مثال: ${prefix}buy reaction_alerts_7d`,
+        ]
+        await reply(lines.join('\n'))
+      } catch (e) {
+        await reply(`❌ تعذر تحميل المتجر حالياً.`)
+      }
+      return true
+    }
+
+    if (cmd === 'features' || cmd === 'مزايا' || cmd === 'اشتراكاتي') {
+      try {
+        const features = db.getActiveFeatures(this.userId, this.number)
+        if (!features.length) {
+          await reply(`ℹ️ لا توجد مزايا مفعلة حالياً. استخدم ${prefix}store لعرض المتجر.`)
+          return true
+        }
+        const lines = [
+          `✨ المزايا النشطة للرقم ${this.number}:`,
+          ...features.map((item) => `• ${item.title} — ينتهي: ${new Date(item.activeUntil).toLocaleString('ar')}`),
+        ]
+        await reply(lines.join('\n'))
+      } catch (e) {
+        await reply(`❌ تعذر جلب المزايا النشطة.`)
+      }
+      return true
+    }
+
+    if (cmd === 'buy' || cmd === 'شراء') {
+      const offerKey = String(rest || '').trim()
+      if (!offerKey) {
+        await reply(`❌ الاستخدام: ${prefix}buy <key>\nمثال: ${prefix}buy reaction_alerts_7d`)
+        return true
+      }
+      try {
+        const result = db.purchaseCoinFeature(this.userId, this.number, offerKey)
+        await reply(
+          `✅ تم شراء: ${result.offer.title}\n` +
+            `💰 الرصيد المتبقي: ${result.wallet.balance} عملة\n` +
+            `⏳ مدة التفعيل: حتى ${new Date(result.activeFeatures.find((item) => item.key === result.offer.key)?.activeUntil || Date.now()).toLocaleString('ar')}`
+        )
+      } catch (e) {
+        if (e?.message === 'offer_not_found') {
+          await reply(`❌ الميزة غير موجودة في المتجر.`)
+        } else if (e?.message === 'insufficient_coins') {
+          await reply(`❌ رصيدك غير كافٍ. السعر ${e.price || 0} والرصيد الحالي ${e.balance || 0}.`)
+        } else {
+          await reply(`❌ تعذر تنفيذ عملية الشراء حالياً.`)
+        }
+      }
+      return true
+    }
+
     if (cmd === 'autoreact' || cmd === 'تفاعل') {
       const val = String(rest || '').trim().toLowerCase()
       if (!['on', 'off', 'تشغيل', 'إيقاف'].includes(val)) {
@@ -1351,6 +1469,11 @@ class WaSession {
       `${prefix}prefix ! - تغيير البادئة`,
       `${prefix}set <key> <value> - تحديث أي إعداد`,
       `${prefix}autoreact on|off - تشغيل/إيقاف التفاعل الفوري`,
+      `${prefix}balance - عرض رصيد العملات`,
+      `${prefix}daily - استلام 50 عملة مجانية كل 24 ساعة`,
+      `${prefix}store - عرض متجر العملات`,
+      `${prefix}buy <key> - شراء ميزة من المتجر`,
+      `${prefix}features - عرض المزايا النشطة`,
       `${prefix}pair 9677XXX - إصدار كود اقتران لرقم جديد عبر هذا الرقم`,
       `${prefix}password <new> - تحديث كلمة مرور لوحة الإعدادات`,
       `${prefix}panel - رابط موقع إعدادات هذا الرقم`,
@@ -1526,6 +1649,12 @@ function getActiveSessionsCount() {
   return sessions.size
 }
 
+async function sendLinkedNumberMessage(userId, number, text) {
+  const ses = getSession(userId, number)
+  if (!ses) return false
+  return ses.sendSelfDM(String(text || '').trim())
+}
+
 module.exports = {
   startSession,
   stopSession,
@@ -1537,4 +1666,5 @@ module.exports = {
   broadcastToWhatsapp,
   STATUS_JID,
   getOwnJidFor,
+  sendLinkedNumberMessage,
 }

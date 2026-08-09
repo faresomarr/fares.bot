@@ -33,10 +33,6 @@ function createAdminMiddleware() {
   }
 }
 
-function escape(s) {
-  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-}
-
 function startWebServer({ getRuntimeStats }) {
   const app = express()
   const adminOnly = createAdminMiddleware()
@@ -58,10 +54,13 @@ function startWebServer({ getRuntimeStats }) {
         siteTitle: config.SITE_TITLE,
         siteDescription: config.SITE_DESCRIPTION,
         websiteUrl: config.WEBSITE_URL,
+        ownerPanelUrl: `${config.WEBSITE_URL.replace(/\/+$/, '')}/panel`,
         whatsappChannelUrl: config.WHATSAPP_CHANNEL_URL,
         developerWhatsappUrl: config.DEVELOPER_WHATSAPP_URL,
         developerWhatsappNumber: config.DEVELOPER_WHATSAPP,
         telegramBotUrl: config.TELEGRAM_BOT_URL,
+        dailyCoinAmount: db.DAILY_COIN_AMOUNT,
+        coinStore: db.COIN_STORE,
       },
     })
   })
@@ -122,7 +121,10 @@ function startWebServer({ getRuntimeStats }) {
       res.json({ ok: true, comment: formatApiComment(updated) })
     } catch (e) {
       const status = e.message === 'comment_not_found' ? 404 : 400
-      res.status(status).json({ ok: false, error: e.message === 'comment_not_found' ? 'التعليق غير موجود.' : 'الرد غير صالح.' })
+      res.status(status).json({
+        ok: false,
+        error: e.message === 'comment_not_found' ? 'التعليق غير موجود.' : 'الرد غير صالح.',
+      })
     }
   })
 
@@ -137,7 +139,11 @@ function startWebServer({ getRuntimeStats }) {
     if (!num) return res.status(400).json({ ok: false, error: 'رقم غير صالح.' })
     const record = db.getAllNumbers().find((n) => n.number === num)
     if (!record) return res.status(404).json({ ok: false, error: 'الرقم غير مربوط على هذا البوت.' })
-    res.json({ ok: true, defaultPassword: db.getDefaultPanelPasswordFor(num), hasCustomPassword: Boolean(record.panelPasswordHash) })
+    res.json({
+      ok: true,
+      defaultPassword: db.getDefaultPanelPasswordFor(num),
+      hasCustomPassword: Boolean(record.panelPasswordHash),
+    })
   })
 
   app.post('/api/panel/login', (req, res) => {
@@ -158,8 +164,15 @@ function startWebServer({ getRuntimeStats }) {
       if (!ok) return res.status(401).json({ ok: false, error: 'كلمة المرور غير صحيحة.' })
 
       const token = db.createPanelSession(owner, number)
-      res.cookie?.(`panel_${number}`, token, { httpOnly: false, sameSite: 'lax' })
-      res.json({ ok: true, token, userId: owner, number, settings: db.getPhoneSettings(owner, number), status: record.status })
+      res.json({
+        ok: true,
+        token,
+        userId: owner,
+        number,
+        settings: db.getPhoneSettings(owner, number),
+        status: record.status,
+        wallet: db.getWalletSummary(owner, number),
+      })
     } catch (e) {
       res.status(400).json({ ok: false, error: e.message || 'خطأ غير متوقع.' })
     }
@@ -200,7 +213,7 @@ function startWebServer({ getRuntimeStats }) {
   app.post('/api/panel/:number/settings', requirePanelSession, (req, res) => {
     try {
       const sess = req.panelSession
-      const patch = (req.body?.settings && typeof req.body.settings === 'object') ? req.body.settings : (req.body || {})
+      const patch = req.body?.settings && typeof req.body.settings === 'object' ? req.body.settings : req.body || {}
       delete patch.token
       const next = db.setPhoneSettings(sess.userId, sess.number, patch)
       res.json({ ok: true, settings: next })
@@ -248,6 +261,104 @@ function startWebServer({ getRuntimeStats }) {
     }
   })
 
+  app.get('/api/panel/:number/wallet', requirePanelSession, (req, res) => {
+    try {
+      const sess = req.panelSession
+      res.json({
+        ok: true,
+        wallet: db.getWalletSummary(sess.userId, sess.number),
+        store: db.getCoinStoreCatalog(sess.userId, sess.number),
+      })
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message || 'تعذر تحميل المحفظة.' })
+    }
+  })
+
+  app.post('/api/panel/:number/claim-daily', requirePanelSession, async (req, res) => {
+    try {
+      const sess = req.panelSession
+      const result = db.claimDailyCoins(sess.userId, sess.number)
+      let notificationSent = false
+      try {
+        const text = [
+          `🎁 تم الحصول على ${result.amount} عملة مجانية لرقمك ${sess.number}.`,
+          `💰 الرصيد الحالي: ${result.wallet.balance} عملة.`,
+          `🕒 الاستلام القادم بعد 24 ساعة من الآن.`,
+        ].join('\n')
+        notificationSent = Boolean(await whatsapp.sendLinkedNumberMessage(sess.userId, sess.number, text))
+      } catch {}
+
+      res.json({
+        ok: true,
+        amount: result.amount,
+        wallet: result.wallet,
+        notificationSent,
+      })
+    } catch (e) {
+      if (e.message === 'daily_not_ready') {
+        return res.status(429).json({
+          ok: false,
+          error: 'تم استلام المكافأة اليومية مسبقاً.',
+          nextClaimAt: e.nextClaimAt || null,
+          remainingMs: e.remainingMs || 0,
+        })
+      }
+      res.status(400).json({ ok: false, error: e.message || 'تعذر استلام المكافأة اليومية.' })
+    }
+  })
+
+  app.post('/api/panel/:number/store/buy', requirePanelSession, async (req, res) => {
+    try {
+      const sess = req.panelSession
+      const offerKey = String(req.body?.offerKey || '').trim()
+      const result = db.purchaseCoinFeature(sess.userId, sess.number, offerKey)
+      let notificationSent = false
+      try {
+        const text = [
+          `🛒 تم شراء الميزة: ${result.offer.title}`,
+          `💰 الرصيد المتبقي: ${result.wallet.balance} عملة.`,
+          `⏳ الميزة مفعلة الآن على رقمك المربوط.`,
+        ].join('\n')
+        notificationSent = Boolean(await whatsapp.sendLinkedNumberMessage(sess.userId, sess.number, text))
+      } catch {}
+
+      res.json({
+        ok: true,
+        result,
+        notificationSent,
+      })
+    } catch (e) {
+      const code = e.message === 'offer_not_found' ? 404 : e.message === 'insufficient_coins' ? 400 : 400
+      res.status(code).json({
+        ok: false,
+        error:
+          e.message === 'offer_not_found'
+            ? 'الميزة المطلوبة غير موجودة.'
+            : e.message === 'insufficient_coins'
+              ? 'رصيد العملات غير كافٍ لإتمام الشراء.'
+              : e.message || 'تعذر إتمام عملية الشراء.',
+        balance: e.balance,
+        price: e.price,
+      })
+    }
+  })
+
+  app.get('/api/panel/:number/status-reactions', requirePanelSession, (req, res) => {
+    try {
+      const sess = req.panelSession
+      res.json({
+        ok: true,
+        reactions: db.getStatusReactionState(sess.userId, sess.number),
+      })
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message || 'تعذر تحميل سجل التفاعلات.' })
+    }
+  })
+
+  app.get('/panel', (req, res) => {
+    res.sendFile(path.join(publicDir, 'panel.html'))
+  })
+
   app.get('/panel/:number', (req, res) => {
     res.sendFile(path.join(publicDir, 'panel.html'))
   })
@@ -263,8 +374,6 @@ function startWebServer({ getRuntimeStats }) {
 
   return { app, server }
 }
-
-function _unused(e) { return escape(e) }
 
 module.exports = {
   startWebServer,
