@@ -80,6 +80,8 @@ const DEFAULT_PHONE_SETTINGS = {
   mode: 'private',
   antiBad: 'off',
   antiLink: 'off',
+  antiGroupAdd: 'off',
+  antiPrivateMessages: 'off',
   autoRecording: 'off',
   autoTyping: 'off',
   alwaysOnline: 'off',

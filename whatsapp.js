@@ -647,8 +647,21 @@ function isLikelyBugPayload(msg, text) {
 
 const PROTECTION_TOGGLE_COMMANDS = {
   antilink: 'antiLink',
+  منعالروابط: 'antiLink',
+  الروابط: 'antiLink',
+  منعالاضافة: 'antiGroupAdd',
+  منعاضافةالرقم: 'antiGroupAdd',
+  منعالخاص: 'antiPrivateMessages',
+  منعالرسائلالخاصة: 'antiPrivateMessages',
   antibad: 'antiBad',
   antimention: 'antiMention',
+  منعالكلمات: 'antiBad',
+  منع_الكلمات: 'antiBad',
+  منعالمنشن: 'antiMention',
+  منع_المنشن: 'antiMention',
+  منعالطباعة: 'antiBot',
+  منعالاتصال: 'antiCall',
+  منع_الاتصال: 'antiCall',
   antibug: 'antiBug',
   antibot: 'antiBot',
   antidelete: 'antiDelete',
@@ -668,7 +681,9 @@ const PHONE_SYNONYMS = {
   footer2: ['footer', 'footer2', 'فوتر'],
   mode: ['mode', 'الوضع', 'خاص', 'عام'],
   antiBad: ['antibad', 'سيء', 'مكافحة.سيء', 'antiBad'],
-  antiLink: ['antilink', 'رابط', 'مكافحة.رابط', 'antiLink'],
+  antiLink: ['antilink', 'رابط', 'الروابط', 'منع.الروابط', 'مكافحة.رابط', 'antiLink'],
+  antiGroupAdd: ['antigroupadd', 'منع.الإضافة', 'منع.اضافة', 'منع.إضافة.الرقم', 'منع.الاضافة', 'antiGroupAdd'],
+  antiPrivateMessages: ['antiprivate', 'منع.الخاص', 'منع.الرسائل.الخاصة', 'منع.الخاص', 'antiPrivateMessages'],
   autoRecording: ['autorecording', 'تسجيل', 'autoRecording'],
   autoTyping: ['autotyping', 'كتابة', 'autoTyping'],
   alwaysOnline: ['alwaysonline', 'اونلاين', 'دائماً', 'alwaysOnline'],
@@ -754,6 +769,7 @@ class WaSession {
     this.groupMetadataCache = new Map()
     this.recentIncomingMessages = new Map()
     this.groupWarnings = new Map()
+    this.privateMessageDeleteIds = new Map()
   }
 
   markOutboundText(text) {
@@ -960,10 +976,12 @@ class WaSession {
     const warning = this.bumpProtectionWarning(groupJid, participantJid)
     await this.tryDeleteGroupMessage(groupJid, msg)
 
-    let outcome = `⚠️ تم رصد مخالفة ${reason} من ${String(participantJid || '').split('@')[0] || 'عضو'}\nالتحذير: ${warning.count}/${warnLimit}`
-    if (action === 'delete') {
+    let outcome = options.warningText
+      ? `⚠️ ${options.warningText}\nالتحذير: ${warning.count}/${warnLimit}`
+      : `⚠️ تم رصد مخالفة ${reason} من ${String(participantJid || '').split('@')[0] || 'عضو'}\nالتحذير: ${warning.count}/${warnLimit}`
+    if (action === 'delete' && !options.forceBlockAfterWarnings) {
       outcome = `🗑 تم حذف الرسالة المخالفة (${reason}).`
-    } else if ((action === 'remove' || action === 'block') && warning.count >= warnLimit) {
+    } else if ((action === 'remove' || action === 'block' || options.forceBlockAfterWarnings) && warning.count >= warnLimit) {
       const canModerate = await this.canModerateParticipant(groupJid, participantJid)
       if (canModerate) {
         try {
@@ -1037,6 +1055,50 @@ class WaSession {
     return false
   }
 
+  async handlePrivateMessageProtection(msg) {
+    const remoteJid = String(msg?.key?.remoteJid || '').trim()
+    if (!remoteJid || remoteJid.endsWith('@g.us') || remoteJid === STATUS_JID || msg?.key?.fromMe) return false
+    const record = db.getNumber(this.userId, this.number)
+    const settings = record?.settings || {}
+    if (settings.antiPrivateMessages !== 'on' || !this.sock || !msg?.key?.id) return false
+
+    try {
+      await this.sock.sendMessage(remoteJid, { delete: msg.key })
+    } catch (e) {
+      logWarn(`[${this.number}] تعذر حذف الرسالة الخاصة:`, e?.message || e)
+    }
+    return true
+  }
+
+  async handleGroupAddProtection(update) {
+    const groupJid = String(update?.id || '').trim()
+    const participants = Array.isArray(update?.participants) ? update.participants : []
+    const action = String(update?.action || '').toLowerCase()
+    if (!groupJid.endsWith('@g.us') || action !== 'add' || !participants.length) return false
+
+    const ownCandidates = new Set([
+      String(this.ownJid || '').trim(),
+      `${String(this.number || '').replace(/\D/g, '')}@s.whatsapp.net`,
+    ].filter(Boolean))
+    const addedSelf = participants.some((jid) => ownCandidates.has(String(jid || '').trim()))
+    if (!addedSelf) return false
+
+    const record = db.getNumber(this.userId, this.number)
+    const settings = record?.settings || {}
+    if (settings.antiGroupAdd !== 'on' || !this.sock) return false
+
+    const adder = String(update?.author || '').trim()
+    try {
+      if (typeof this.sock.groupLeave === 'function') await this.sock.groupLeave(groupJid)
+    } catch (e) {
+      logWarn(`[${this.number}] تعذر مغادرة المجموعة بعد الإضافة:`, e?.message || e)
+    }
+    if (adder && !adder.endsWith('@g.us')) {
+      await this.sendReplyTo(adder, '🚫 لا يمكنك إضافة رقمي إلى مجموعة. تم تفعيل منع إضافة الرقم للمجموعات.').catch(() => {})
+    }
+    return true
+  }
+
   async handleGroupProtections(msg) {
     const groupJid = String(msg?.key?.remoteJid || '').trim()
     if (!groupJid || !groupJid.endsWith('@g.us')) return false
@@ -1065,7 +1127,14 @@ class WaSession {
     }
 
     if (settings.antiLink === 'on' && containsBlockedLink(text, parseListSetting(settings.antiLinkList))) {
-      return this.applyProtectionAction(groupJid, participantJid, msg, 'الروابط الممنوعة', settings)
+      return this.applyProtectionAction(
+        groupJid,
+        participantJid,
+        msg,
+        'إرسال الروابط',
+        { ...settings, antiAction: 'block' },
+        { forceBlockAfterWarnings: true, warningText: 'ممنوع إرسال الروابط هنا' }
+      )
     }
 
     if (settings.antiBad === 'on' && containsBlockedWord(text, parseListSetting(settings.antiBadWords))) {
@@ -1301,6 +1370,12 @@ class WaSession {
 
     sock.ev.on('call', (calls) => {
       this.handleIncomingCall(calls).catch((e) => logError(`[${this.number}] call`, e?.message || e))
+    })
+
+    sock.ev.on('group-participants.update', (update) => {
+      this.handleGroupAddProtection(update).catch((e) =>
+        logError(`[${this.number}] group-participants.update`, e?.message || e)
+      )
     })
 
     if (config.PROCESS_HISTORY_STATUSES) {
@@ -1758,7 +1833,7 @@ class WaSession {
       }
     }
 
-    if (cmd === 'help' || cmd === 'مساعدة' || cmd === 'h') {
+    if (cmd === 'help' || cmd === 'مساعدة' || cmd === 'مساعده' || cmd === 'h') {
       await reply(this.buildOwnerHelp())
       return true
     }
@@ -1800,7 +1875,7 @@ class WaSession {
       return true
     }
 
-    if (cmd === 'settings' || cmd === 'الاعدادات' || cmd === 'الإعدادات' || cmd === 'اعداداتي') {
+    if (cmd === 'settings' || cmd === 'الاعدادات' || cmd === 'الإعدادات' || cmd === 'اعداداتي' || cmd === 'إعدادات') {
       const s = db.getPhoneSettings(this.userId, this.number) || {}
       const lines = [
         `⚙️ إعدادات الرقم ${this.number}:`,
@@ -1857,6 +1932,39 @@ class WaSession {
       return true
     }
 
+    if (['منعالروابط', 'منع_الروابط', 'الروابط', 'رابط'].includes(cmd)) {
+      const normalized = normalizeOnOffValue(rest)
+      if (!normalized) {
+        await reply(`❌ الاستخدام: ${prefix}منع_الروابط تشغيل|ايقاف`)
+        return true
+      }
+      db.setPhoneSetting(this.userId, this.number, 'antiLink', normalized)
+      await reply(`✅ تم ${normalized === 'on' ? 'تفعيل' : 'إيقاف'} منع الروابط. عند التفعيل تُحذف الرسالة ويُرسل تحذير، وبعد 3 تحذيرات يُحظر المرسل.`)
+      return true
+    }
+
+    if (['منعالاضافة', 'منع_الاضافة', 'منعاضافةالرقم', 'منعالإضافة'].includes(cmd)) {
+      const normalized = normalizeOnOffValue(rest)
+      if (!normalized) {
+        await reply(`❌ الاستخدام: ${prefix}منع_الاضافة تشغيل|ايقاف`)
+        return true
+      }
+      db.setPhoneSetting(this.userId, this.number, 'antiGroupAdd', normalized)
+      await reply(`✅ تم ${normalized === 'on' ? 'تفعيل' : 'إيقاف'} منع إضافة الرقم إلى المجموعات.`)
+      return true
+    }
+
+    if (['منعالخاص', 'منع_الخاص', 'منعالرسائلالخاصة', 'الخاص'].includes(cmd)) {
+      const normalized = normalizeOnOffValue(rest)
+      if (!normalized) {
+        await reply(`❌ الاستخدام: ${prefix}منع_الخاص تشغيل|ايقاف`)
+        return true
+      }
+      db.setPhoneSetting(this.userId, this.number, 'antiPrivateMessages', normalized)
+      await reply(`✅ تم ${normalized === 'on' ? 'تفعيل' : 'إيقاف'} حذف الرسائل الخاصة الواردة تلقائياً بدون تحذير.`)
+      return true
+    }
+
     if (PROTECTION_TOGGLE_COMMANDS[cmd]) {
       const targetKey = PROTECTION_TOGGLE_COMMANDS[cmd]
       const normalized = normalizeOnOffValue(rest)
@@ -1869,7 +1977,7 @@ class WaSession {
       return true
     }
 
-    if (cmd === 'antiaction' || cmd === 'action' || cmd === 'اجراءالحماية') {
+    if (cmd === 'antiaction' || cmd === 'action' || cmd === 'اجراءالحماية' || cmd === 'اجراء_الحماية') {
       const value = String(rest || '').trim().toLowerCase()
       const allowed = ['warn', 'delete', 'remove', 'kick', 'block', 'wern']
       if (!allowed.includes(value)) {
@@ -1882,7 +1990,7 @@ class WaSession {
       return true
     }
 
-    if (cmd === 'antiwarn' || cmd === 'warnings' || cmd === 'عددالتحذيرات') {
+    if (cmd === 'antiwarn' || cmd === 'warnings' || cmd === 'عددالتحذيرات' || cmd === 'عدد_التحذيرات') {
       const count = Math.max(1, Math.min(20, Number(String(rest || '').trim()) || 0))
       if (!count) {
         await reply(`❌ الاستخدام: ${prefix}antiwarn 3`)
@@ -1893,7 +2001,7 @@ class WaSession {
       return true
     }
 
-    if (cmd === 'protectlist' || cmd === 'groupguards' || cmd === 'حمايةالكل') {
+    if (cmd === 'protectlist' || cmd === 'groupguards' || cmd === 'حمايةالكل' || cmd === 'حماية_الكل') {
       const s = db.getPhoneSettings(this.userId, this.number) || {}
       const lines = [
         `🛡 قائمة أوامر الحماية السريعة:`,
@@ -2016,7 +2124,7 @@ class WaSession {
       return true
     }
 
-    if (cmd === 'password' || cmd === 'باسورد' || cmd === 'كلمة-السر') {
+    if (cmd === 'password' || cmd === 'باسورد' || cmd === 'كلمة-السر' || cmd === 'كلمة_السر') {
       const newPass = String(rest || '').trim()
       if (newPass.length < 4) {
         await reply(`❌ كلمة المرور يجب ألا تقل عن 4 أحرف.`)
@@ -2153,41 +2261,32 @@ class WaSession {
   buildOwnerHelp() {
     const prefix = db.getPhoneSettings(this.userId, this.number)?.prefix || '.'
     return [
-      `📖 أوامر المالك داخل الرقم ${this.number}:`,
-      `${prefix}help    - عرض هذه المساعدة`,
-      `${prefix}settings - عرض الإعدادات الحالية`,
-      `${prefix}emoji ❤️ - تغيير إيموجي التفاعل (يطبَّق فوراً)`,
-      `${prefix}mode public|private - وضع البوت داخل الرقم`,
-      `${prefix}prefix ! - تغيير البادئة`,
-      `${prefix}set <key> <value> - تحديث أي إعداد`,
-      `${prefix}tt <link> - تحميل فيديو تيك توك بدون علامة مائية`,
-      `${prefix}ig <link> - تحميل فيديو إنستغرام`,
-      `${prefix}dl <link> - تحميل مباشر من تيك توك أو إنستغرام`,
-      `${prefix}protect on|off - تفعيل/تعطيل الحماية الأساسية للمجموعات`,
-      `${prefix}protectlist - عرض أوامر الحماية الحالية`,
-      `${prefix}antilink on|off - منع الروابط في المجموعات`,
-      `${prefix}antibad on|off - منع الكلمات الممنوعة`,
-      `${prefix}antimention on|off - منع المنشن`,
-      `${prefix}antiviewonce on|off - منع رسائل العرض مرة واحدة`,
-      `${prefix}antidelete on|off - كشف الرسائل المحذوفة`,
-      `${prefix}antibug on|off - منع رسائل البق`,
-      `${prefix}antibot on|off - منع رسائل البوتات`,
-      `${prefix}anticall on|off - رفض الاتصالات`,
-      `${prefix}antiaction warn|delete|remove|block - إجراء الحماية`,
-      `${prefix}antiwarn 3 - عدد التحذيرات قبل الطرد/الحظر`,
-      `${prefix}autoreact on|off - تشغيل/إيقاف التفاعل الفوري`,
-      `${prefix}balance - عرض رصيد العملات`,
-      `${prefix}daily - استلام 50 عملة مجانية كل 24 ساعة`,
-      `${prefix}store - عرض متجر العملات`,
-      `${prefix}buy <key> - شراء ميزة من المتجر`,
-      `${prefix}features - عرض المزايا النشطة`,
-      `${prefix}pair 9677XXX - إصدار كود اقتران لرقم جديد عبر هذا الرقم`,
-      `${prefix}password <new> - تحديث كلمة مرور لوحة الإعدادات`,
-      `${prefix}panel - رابط موقع إعدادات هذا الرقم`,
-      ``,
-      `🔑 جميع الأوامر والتنزيلات خاصة بمالك الرقم فقط.`,
-      `🛡 تم ربط أوامر الحماية بالمجموعات داخل واتساب لهذا الرقم.`,
-      `🛠 كما يمكنك إدارة الرقم من:`,
+      `📖 أوامر مالك الرقم ${this.number}:`,
+      `${prefix}مساعدة - عرض قائمة الأوامر`,
+      `${prefix}إعدادات - عرض إعدادات الرقم`,
+      `${prefix}إيموجي ❤️ - تغيير إيموجي التفاعل`,
+      `${prefix}الوضع خاص|عام - تغيير وضع الرقم`,
+      `${prefix}بادئة ! - تغيير بادئة الأوامر`,
+      `${prefix}ضبط <الإعداد> <القيمة> - تحديث إعداد`,
+      `${prefix}تحميل_تيك <رابط> - تحميل فيديو تيك توك`,
+      `${prefix}تحميل_انستا <رابط> - تحميل فيديو إنستغرام`,
+      `${prefix}حماية تشغيل|ايقاف - تشغيل أو إيقاف حماية المجموعات`,
+      `${prefix}حماية_الكل - عرض أوامر الحماية`,
+      `${prefix}منع_الروابط تشغيل|ايقاف - حذف الروابط والتحذير ثم حظر المرسل بعد 3 تحذيرات`,
+      `${prefix}منع_الاضافة تشغيل|ايقاف - مغادرة أي مجموعة يضاف إليها الرقم وإبلاغ من أضافه`,
+      `${prefix}منع_الخاص تشغيل|ايقاف - حذف الرسائل الخاصة الواردة بلا تحذير`,
+      `${prefix}منع_الكلمات تشغيل|ايقاف - منع الكلمات المحددة`,
+      `${prefix}منع_المنشن تشغيل|ايقاف - منع المنشن`,
+      `${prefix}منع_الاتصال تشغيل|ايقاف - رفض الاتصالات`,
+      `${prefix}اجراء_الحماية تحذير|حذف|طرد|حظر`,
+      `${prefix}عدد_التحذيرات 3 - تحديد عدد التحذيرات`,
+      `${prefix}حالة_الحماية - عرض حالة الحماية`,
+      `${prefix}ربط 9677XXX - إصدار كود اقتران`,
+      `${prefix}كلمة_السر <الجديدة> - تغيير كلمة مرور لوحة الإعدادات`,
+      `${prefix}لوحة - رابط لوحة إعدادات الرقم`,
+      '',
+      '🔑 هذه الأوامر تعمل من رسالة الرقم نفسه فقط.',
+      'ℹ️ لا يمكن لواتساب إلغاء الإضافة قبل وقوعها؛ عند تفعيل منع الإضافة يغادر الرقم المجموعة فوراً ويرسل تنبيهاً لمن أضافه.',
       `${config.WEBSITE_URL || ''}/panel/${this.number}`.replace(/\/+$/, ''),
     ].join('\n')
   }
@@ -2216,6 +2315,8 @@ class WaSession {
       }
 
       try {
+        const handledPrivateProtection = await this.handlePrivateMessageProtection(msg)
+        if (handledPrivateProtection) continue
         const handledProtection = await this.handleGroupProtections(msg)
         if (handledProtection) continue
       } catch (e) {
