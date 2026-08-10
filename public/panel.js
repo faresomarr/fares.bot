@@ -77,7 +77,6 @@
       alwaysOnline: { label: 'دائمًا أونلاين', type: 'select', options: ['on', 'off'] },
       autoStatusRead: { label: 'مشاهدة الحالة تلقائيًا', type: 'select', options: ['on', 'off'] },
       autoStatusReact: { label: 'التفاعل مع الحالة تلقائيًا', type: 'select', options: ['on', 'off'] },
-      statusReactionNotice: { label: 'إظهار التفاعل لصاحب الرقم', type: 'select', options: ['on', 'off'] },
       keepDeletedStatus: { label: 'حفظ الحالة عند حذفها', type: 'select', options: ['on', 'off'] },
       ghostMode: { label: 'تفعيل الشبح', type: 'select', options: ['on', 'off'] },
       autoPrivateReact: { label: 'التفاعل التلقائي للخاص', type: 'select', options: ['on', 'off'] },
@@ -153,7 +152,7 @@
     container.innerHTML = ''
     const groupedLabels = {
       'معلومات أساسية': ['name', 'ownerNumber', 'ownername', 'description', 'from', 'age', 'prefix', 'footer2', 'mode', 'language'],
-      'التفاعل والحالات': ['statusCustomReact', 'autoStatusRead', 'autoStatusReact', 'statusReactionNotice', 'keepDeletedStatus', 'autoRead', 'autoReact', 'autoPrivateReact', 'autoReactScope'],
+      'التفاعل والحالات': ['statusCustomReact', 'autoStatusRead', 'autoStatusReact', 'keepDeletedStatus', 'autoRead', 'autoReact', 'autoPrivateReact', 'autoReactScope'],
       'الرد التلقائي والـ AI': ['customAutoReplies', 'aiReplyScope', 'aliveMsg', 'customMsg', 'statusMsgSend', 'statusMsgType', 'voiceFooter'],
       'الحماية والفلاتر': ['antiBad', 'antiBadWords', 'antiLink', 'antiLinkList', 'antiMention', 'antiViewOnce', 'antiBug', 'antiBot', 'antiBotAction', 'antiDelete', 'sendDeleteTo', 'disableReadReceipts', 'antiEdit', 'antiAction', 'antiWarnCount'],
       'الاتصالات': ['antiCall', 'excludeCallNumbers', 'autoBlock', 'autoVoice'],
@@ -241,7 +240,6 @@
           { cmd: prefix + 'المكافأة', desc: 'استلام العملات اليومية' },
           { cmd: prefix + 'المتجر', desc: 'عرض متجر المزايا' },
           { cmd: prefix + 'اشتراكاتي', desc: 'عرض المزايا النشطة' },
-          { cmd: prefix + 'شراء reaction_alerts_7d', desc: 'شراء ميزة من المتجر' },
           { cmd: prefix + 'ربط 9677XXXXXXXX', desc: 'إصدار كود اقتران لرقم جديد' },
         ],
       },
