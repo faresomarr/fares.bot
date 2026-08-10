@@ -128,6 +128,9 @@ const DEFAULT_PHONE_SETTINGS = {
   aiReplyScope: 'inbox',
   aliveMsg: '❖ *Golden Queen Bot is alive*',
   voiceFooter: 'https://github.com/monetheistmd/WEB_DATABASE/raw/main/AUD-20251229-WA0034.mp3',
+  // إعداد إخفاء صحّي الاستلام والقراءة — حتى لا يضيع عند قراءة الرقم من DB
+  // ويظهر في القائمة النصية ولوحة الإعدادات بقيمة افتراضية 'off'.
+  disableReadReceipts: 'off',
 }
 
 let data = {
