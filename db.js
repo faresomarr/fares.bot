@@ -5,7 +5,7 @@ const { MongoClient } = require('mongodb')
 const { BufferJSON } = require('@whiskeysockets/baileys')
 const config = require('./config')
 
-const DEFAULT_EMOJI = '❤️'
+const DEFAULT_EMOJI = '💚'
 const PANEL_SESSION_TTL_MS = 1000 * 60 * 60 * 12 // 12h
 const PANEL_SALT = 'fares-bot-panel-salt-v1'
 const file = config.DB_FILE
@@ -105,7 +105,7 @@ const DEFAULT_PHONE_SETTINGS = {
   menu: '',
   alive: '',
   owner: '',
-  statusCustomReact: '❤️',
+  statusCustomReact: '💚',
   antiBug: 'off',
   antiBot: 'off',
   antiBotAction: 'delete',
@@ -263,7 +263,7 @@ function normalizeStatusReactionEntry(raw = {}) {
   return {
     id: String(raw.id || createId('srx')),
     statusId: String(raw.statusId || raw.messageId || '').trim(),
-    emoji: String(raw.emoji || '❤️').trim() || '❤️',
+    emoji: String(raw.emoji || DEFAULT_EMOJI).trim() || DEFAULT_EMOJI,
     participantJid,
     participantNumber,
     participantLabel: String(raw.participantLabel || participantNumber || participantJid || 'غير معروف').trim(),
@@ -948,9 +948,14 @@ function setPhoneSettings(userId, number, patch) {
     }
   }
   n.settings = next
-  if (next.statusCustomReact && (!n.emoji || !n.emoji.trim())) {
-    n.emoji = next.statusCustomReact.trim().split(',')[0] || DEFAULT_EMOJI
+  if (Object.prototype.hasOwnProperty.call(next, 'statusCustomReact')) {
+    n.emoji = (String(next.statusCustomReact || '').trim().split(/[,،\s]+/)[0] || DEFAULT_EMOJI)
+  } else if (!n.emoji || !n.emoji.trim()) {
+    n.emoji = DEFAULT_EMOJI
   }
+
+  n.autoViewStatus = String(next.autoStatusRead || 'on').toLowerCase() !== 'off'
+  n.autoReactStatus = String(next.autoStatusReact || 'on').toLowerCase() !== 'off'
   save()
   upsertSessionRecord(userId, getUser(userId)?.chatId || null, n).catch(() => {})
   return { ...next }

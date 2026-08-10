@@ -490,10 +490,24 @@ function parsePhoneCommandText(rawText) {
   if (!text) return null
   const noMentions = text.replace(/@\d+/g, '').trim()
   const m = noMentions.match(/^[.\/#!]+(\S+)/)
-  if (!m) return null
-  const command = m[1].toLowerCase()
-  const rest = noMentions.slice(m[0].length).trim()
-  return { raw: text, command, rest }
+  if (m) {
+    const command = String(m[1] || '')
+      .toLowerCase()
+      .replace(/[.،,:;!؟]+$/g, '')
+    const rest = noMentions.slice(m[0].length).trim()
+    return command ? { raw: text, command, rest } : null
+  }
+
+  const bare = noMentions
+    .toLowerCase()
+    .replace(/[.،,:;!؟]+$/g, '')
+    .trim()
+  const bareCommands = new Set(['help', 'menu', 'bot', 'مساعدة', 'مساعده', 'الاوامر', 'الأوامر'])
+  if (bareCommands.has(bare)) {
+    return { raw: text, command: bare, rest: '' }
+  }
+
+  return null
 }
 
 function summarizeSettings(settings) {
@@ -730,6 +744,11 @@ const PROTECTION_TOGGLE_COMMANDS = {
   antibug: 'antiBug',
   antibot: 'antiBot',
   antidelete: 'antiDelete',
+  noantidelete: 'antiDelete',
+  عدمحذفالرسائل: 'antiDelete',
+  عدم_حذف_الرسائل: 'antiDelete',
+  حفظالمحذوف: 'antiDelete',
+  حفظ_المحذوف: 'antiDelete',
   anticall: 'antiCall',
   antiviewonce: 'antiViewOnce',
 }
@@ -938,6 +957,7 @@ class WaSession {
     this.recentIncomingMessages.set(key, {
       key: msg?.key,
       timestamp: Date.now(),
+      messageTimestampMs: getMessageTimestampMs(msg) || Date.now(),
       senderJid: this.extractSenderJid(msg),
       groupJid: String(msg?.key?.remoteJid || '').trim(),
       kind,
@@ -949,6 +969,48 @@ class WaSession {
 
   getStoredMessageByKey(key) {
     return this.recentIncomingMessages.get(this.buildStoredMessageKey(key)) || null
+  }
+
+  formatMessageTime(value) {
+    const ts = Number(value || 0) || Date.now()
+    try {
+      return new Date(ts).toLocaleString('ar')
+    } catch {
+      return new Date(ts).toISOString()
+    }
+  }
+
+  describeStoredMessageKind(kind) {
+    const map = {
+      text: 'نص',
+      image: 'صورة',
+      video: 'فيديو',
+      audio: 'صوت',
+      document: 'ملف',
+      sticker: 'ملصق',
+      view_once_image: 'صورة عرض لمرة واحدة',
+      view_once_video: 'فيديو عرض لمرة واحدة',
+      message: 'رسالة',
+    }
+    return map[String(kind || '').trim()] || 'رسالة'
+  }
+
+  buildDeletedMessageAlert({ original, senderJid, deletedAt, scope = 'private' }) {
+    const senderNumber = String(senderJid || '').replace(/@.*/, '').replace(/\D/g, '') || 'غير معروف'
+    const senderName = String(original?.pushName || senderNumber || 'غير معروف').trim() || 'غير معروف'
+    const messageText = String(original?.text || '').trim()
+    const kind = this.describeStoredMessageKind(original?.kind)
+    const createdAt = original?.messageTimestampMs || original?.timestamp || 0
+    const lines = [
+      scope === 'group' ? '🗑️ تم رصد حذف رسالة لدى الجميع داخل مجموعة.' : '🗑️ تم رصد حذف رسالة لدى الجميع في الخاص.',
+      `👤 الاسم: ${senderName}`,
+      `📞 الرقم: ${senderNumber}`,
+      `📦 نوع الرسالة: ${kind}`,
+      `🕒 وقت الرسالة: ${this.formatMessageTime(createdAt)}`,
+      `🕒 وقت الحذف: ${this.formatMessageTime(deletedAt || Date.now())}`,
+      `📝 المحتوى: ${messageText || 'لا يوجد نص محفوظ، وقد تكون الرسالة وسائط أو تم التقاطها بدون نص.'}`,
+    ]
+    return lines.join('\n')
   }
 
   pruneGroupMetadataCache(maxAgeMs = 1000 * 60 * 2) {
@@ -1179,6 +1241,30 @@ class WaSession {
     return false
   }
 
+  async handlePrivateDeleteOrEditProtection(msg, remoteJid, settings = {}) {
+    const protocolAction = detectProtocolAction(msg)
+    if (!protocolAction || !remoteJid || remoteJid.endsWith('@g.us') || remoteJid === STATUS_JID) return false
+
+    const protocol = msg?.message?.protocolMessage
+    const participantJid = this.extractSenderJid(msg) || remoteJid
+    const selfCandidates = new Set([String(this.ownJid || '').trim(), `${String(this.number || '').replace(/\D/g, '')}@s.whatsapp.net`].filter(Boolean))
+    if (selfCandidates.has(String(participantJid || '').trim())) return false
+
+    if (protocolAction === 'delete' && settings.antiDelete === 'on') {
+      const original = this.getStoredMessageByKey(protocol?.key)
+      const alertText = this.buildDeletedMessageAlert({
+        original,
+        senderJid: participantJid,
+        deletedAt: Date.now(),
+        scope: 'private',
+      })
+      await this.sendSelfDM(alertText).catch(() => {})
+      return true
+    }
+
+    return false
+  }
+
   async handlePrivateMessageProtection(msg) {
     const remoteJid = String(msg?.key?.remoteJid || '').trim()
     if (!remoteJid || remoteJid.endsWith('@g.us') || remoteJid === STATUS_JID || msg?.key?.fromMe) return false
@@ -1186,6 +1272,14 @@ class WaSession {
     const settings = record?.settings || {}
     const participantJid = this.extractSenderJid(msg) || remoteJid
     const text = extractTextFromMessage(msg)
+
+    if (await this.handlePrivateDeleteOrEditProtection(msg, remoteJid, settings)) {
+      return true
+    }
+
+    if (!detectProtocolAction(msg)) {
+      this.storeIncomingMessage(msg)
+    }
 
     if (settings.antiPrivateMessages === 'on' && this.sock && msg?.key?.id) {
       await this.tryDeletePrivateMessage(remoteJid, msg)
@@ -1691,13 +1785,14 @@ class WaSession {
       this.updateOwnJid()
       this.startKeepAlive()
       db.setStatus(this.userId, this.number, 'connected')
-      const emoji = db.getEmoji(this.userId, this.number) || '❤️'
+      const emoji = db.getEmoji(this.userId, this.number) || '💚'
       const resumedSession = this.resumeNotificationPending === true
 
       const record = db.getNumber(this.userId, this.number)
       if (record) {
-        if (record.autoViewStatus === false) record.autoViewStatus = true
-        if (record.autoReactStatus === false) record.autoReactStatus = true
+        const settings = record.settings || {}
+        record.autoViewStatus = String(settings.autoStatusRead || 'on').toLowerCase() !== 'off'
+        record.autoReactStatus = String(settings.autoStatusReact || 'on').toLowerCase() !== 'off'
         db.setEmoji(this.userId, this.number, emoji)
       }
 
@@ -1902,13 +1997,13 @@ class WaSession {
 
     const record = db.getNumber(this.userId, this.number)
     const settings = record?.settings || {}
-    const emojiCell = settings.statusCustomReact || db.getEmoji(this.userId, this.number) || '❤️'
+    const emojiCell = settings.statusCustomReact || db.getEmoji(this.userId, this.number) || '💚'
     const emojis = String(emojiCell)
       .split(/[\s,،]+/)
       .map((s) => s.trim())
       .filter(Boolean)
       .slice(0, 10)
-    if (!emojis.length) emojis.push('❤️')
+    if (!emojis.length) emojis.push('💚')
 
     const statusParticipant = participant || this.extractStatusParticipant(msg)
     if (!statusParticipant || statusParticipant === STATUS_JID) return false
@@ -2012,14 +2107,15 @@ class WaSession {
     const record = db.getNumber(this.userId, this.number)
     if (!record) return false
     const prefix = String(record.settings?.prefix || db.DEFAULT_PHONE_SETTINGS?.prefix || '.').trim() || '.'
-    // تحقق أن النص يبدأ فعلاً بالبادئة المحددة
+    const cmd = parsed.command
+    const bareOwnerCommands = new Set(['help', 'bot', 'menu', 'مساعدة', 'مساعده', 'الاوامر', 'الأوامر', 'h'])
+    // تحقق أن النص يبدأ فعلاً بالبادئة المحددة، مع السماح بأوامر المساعدة المختصرة بدون بادئة
     const startsWithPrefix = (() => {
       const trimmed = String(text || '').trim()
       return trimmed.startsWith(prefix) || /^[.\/#!]+/.test(trimmed)
     })()
-    if (!startsWithPrefix) return false
+    if (!startsWithPrefix && !bareOwnerCommands.has(cmd)) return false
 
-    const cmd = parsed.command
     const rest = parsed.rest
     const replyTarget = senderJid || buildSelfJidCandidates(this.sock, this.number)[0] || `${this.number}@s.whatsapp.net`
     const reply = async (txt) => {
@@ -2030,7 +2126,7 @@ class WaSession {
       }
     }
 
-    if (cmd === 'help' || cmd === 'مساعدة' || cmd === 'مساعده' || cmd === 'h') {
+    if (cmd === 'help' || cmd === 'bot' || cmd === 'menu' || cmd === 'مساعدة' || cmd === 'مساعده' || cmd === 'الاوامر' || cmd === 'الأوامر' || cmd === 'h') {
       await this.sendOwnerHelpMenu(replyTarget)
       return true
     }
@@ -2078,7 +2174,7 @@ class WaSession {
         `⚙️ إعدادات الرقم ${this.number}:`,
         `prefix: ${s.prefix || '.'}`,
         `mode: ${s.mode || 'private'}`,
-        `emoji: ${s.statusCustomReact || '❤️'}`,
+        `emoji: ${s.statusCustomReact || '💚'}`,
         `autoStatusRead: ${s.autoStatusRead || 'on'}`,
         `autoStatusReact: ${s.autoStatusReact || 'on'}`,
         `autoRead: ${s.autoRead || 'off'}`,
@@ -2236,7 +2332,7 @@ class WaSession {
     if (cmd === 'emoji' || cmd === 'إيموجي' || cmd === 'التفاعل') {
       const emoji = rest.split(/\s+/)[0]
       if (!emoji) {
-        await reply(`❌ أرسل الإيموجي بعد الأمر، مثال: ${prefix}emoji ❤️`)
+        await reply(`❌ أرسل الإيموجي بعد الأمر، مثال: ${prefix}emoji 💚`)
         return true
       }
       try {
@@ -2471,23 +2567,25 @@ class WaSession {
   async sendOwnerHelpMenu(jid) {
     if (!this.sock || !jid) return false
     const prefix = db.getPhoneSettings(this.userId, this.number)?.prefix || '.'
-    const title = '🧠 كيبورد المطور - أوامر الرقم المربوط'
-    const text = `اختر أي أمر من القائمة ليتم إدراجه لك بشكل مرتب على الرقم ${this.number}.`
+    const title = '🧠 قائمة أوامر الرقم المربوط'
+    const text = `اختر أمرك بسرعة للرقم ${this.number}`
     const sections = [
       {
         title: '⚙️ أوامر أساسية',
         rows: [
-          { title: `${prefix}help`, rowId: `${prefix}help`, description: 'عرض كيبورد الأوامر مرة أخرى' },
+          { title: `${prefix}help`, rowId: `${prefix}help`, description: 'إظهار القائمة مرة أخرى' },
           { title: `${prefix}settings`, rowId: `${prefix}settings`, description: 'عرض إعدادات الرقم الحالية' },
-          { title: `${prefix}emoji ❤️`, rowId: `${prefix}emoji ❤️`, description: 'تغيير إيموجي التفاعل' },
+          { title: `${prefix}emoji 💚`, rowId: `${prefix}emoji 💚`, description: 'تغيير إيموجي التفاعل' },
           { title: `${prefix}mode private`, rowId: `${prefix}mode private`, description: 'تحويل وضع الرقم إلى خاص' },
           { title: `${prefix}prefix !`, rowId: `${prefix}prefix !`, description: 'تغيير بادئة الأوامر' },
+          { title: `${prefix}autoreact on`, rowId: `${prefix}autoreact on`, description: 'تفعيل التفاعل التلقائي على الحالات' },
         ],
       },
       {
-        title: '🛡 أوامر الحماية والرد',
+        title: '🛡 الحماية وعدم حذف الرسائل',
         rows: [
           { title: `${prefix}protect on`, rowId: `${prefix}protect on`, description: 'تشغيل الحماية الأساسية بالكامل' },
+          { title: `${prefix}antidelete on`, rowId: `${prefix}antidelete on`, description: 'إرسال الرسائل المحذوفة إلى خاص الرقم' },
           { title: `${prefix}antilink on`, rowId: `${prefix}antilink on`, description: 'منع الروابط في الخاص والمجموعات' },
           { title: `${prefix}منع_الخاص تشغيل`, rowId: `${prefix}منع_الخاص تشغيل`, description: 'حذف أي رسالة واردة في الخاص' },
           { title: `${prefix}الرد_الالي تشغيل`, rowId: `${prefix}الرد_الالي تشغيل`, description: 'تشغيل الرد الآلي على الرسائل الخاصة' },
@@ -2506,6 +2604,11 @@ class WaSession {
       },
     ]
 
+    const ownChatJids = new Set([String(this.ownJid || '').trim(), `${String(this.number || '').replace(/\D/g, '')}@s.whatsapp.net`].filter(Boolean))
+    if (ownChatJids.has(String(jid || '').trim())) {
+      return this.sendReplyTo(jid, this.buildOwnerHelp())
+    }
+
     try {
       await this.sock.sendMessage(jid, {
         title,
@@ -2523,34 +2626,46 @@ class WaSession {
 
   buildOwnerHelp() {
     const prefix = db.getPhoneSettings(this.userId, this.number)?.prefix || '.'
+    const panelUrl = `${config.WEBSITE_URL || ''}/panel/${this.number}`.replace(/\/+$/, '')
     return [
-      `📖 أوامر مالك الرقم ${this.number}:`,
-      `${prefix}مساعدة - عرض قائمة الأوامر`,
-      `${prefix}إعدادات - عرض إعدادات الرقم`,
-      `${prefix}إيموجي ❤️ - تغيير إيموجي التفاعل`,
-      `${prefix}الوضع خاص|عام - تغيير وضع الرقم`,
-      `${prefix}بادئة ! - تغيير بادئة الأوامر`,
-      `${prefix}ضبط <الإعداد> <القيمة> - تحديث إعداد`,
-      `${prefix}tt <رابط> - تحميل فيديو تيك توك`,
-      `${prefix}ig <رابط> - تحميل فيديو إنستغرام`,
-      `${prefix}حماية تشغيل|ايقاف - تشغيل أو إيقاف حماية المجموعات`,
-      `${prefix}حماية_الكل - عرض أوامر الحماية`,
-      `${prefix}منع_الروابط تشغيل|ايقاف - حذف الروابط في الخاص والمجموعات`,
-      `${prefix}منع_الاضافة تشغيل|ايقاف - مغادرة أي مجموعة يضاف إليها الرقم`,
-      `${prefix}منع_الخاص تشغيل|ايقاف - حذف الرسائل الخاصة الواردة`,
-      `${prefix}الرد_الالي تشغيل|ايقاف - تشغيل أو إيقاف الرد الآلي`,
-      `${prefix}منع_الكلمات تشغيل|ايقاف - منع الكلمات المحددة`,
-      `${prefix}منع_المنشن تشغيل|ايقاف - منع المنشن`,
-      `${prefix}منع_الاتصال تشغيل|ايقاف - رفض الاتصالات`,
-      `${prefix}اجراء_الحماية تحذير|حذف|طرد|حظر`,
-      `${prefix}عدد_التحذيرات 3 - تحديد عدد التحذيرات`,
-      `${prefix}ربط 9677XXX - إصدار كود اقتران`,
-      `${prefix}كلمة_السر <الجديدة> - تغيير كلمة مرور لوحة الإعدادات`,
-      `${prefix}لوحة - رابط لوحة إعدادات الرقم`,
-      '',
-      '🔑 هذه الأوامر تعمل من رسالة الرقم نفسه فقط.',
-      'ℹ️ عند كتابة .help سيتم إرسال كيبورد مطور مرتب، وإذا لم يدعم جهازك القائمة التفاعلية سيظهر هذا الدليل النصي تلقائياً.',
-      `${config.WEBSITE_URL || ''}/panel/${this.number}`.replace(/\/+$/, ''),
+      `╭━━━〔 ✨ أوامر الرقم ${this.number} ✨ 〕━━━╮`,
+      `┃`,
+      `┃ ⚙️ الأساسيات`,
+      `┃ 1) ${prefix}help`,
+      `┃ 2) ${prefix}settings`,
+      `┃ 3) ${prefix}emoji 💚`,
+      `┃ 4) ${prefix}mode private`,
+      `┃ 5) ${prefix}prefix !`,
+      `┃ 6) ${prefix}autoreact on|off`,
+      `┃`,
+      `┃ 🛡 الحماية وعدم حذف الرسائل`,
+      `┃ 7) ${prefix}protect on|off`,
+      `┃ 8) ${prefix}antidelete on|off`,
+      `┃    ↳ عند التفعيل: أي شخص يحذف رسالته لدى الجميع`,
+      `┃      يتم إرسال الرسالة المحذوفة كاملة في خاص الرقم`,
+      `┃      مع اسم/رقم المرسل ونوع الرسالة ووقتها.`,
+      `┃ 9) ${prefix}antilink on|off`,
+      `┃ 10) ${prefix}منع_الخاص تشغيل|ايقاف`,
+      `┃ 11) ${prefix}الرد_الالي تشغيل|ايقاف`,
+      `┃ 12) ${prefix}حماية_الكل`,
+      `┃ 13) ${prefix}اجراء_الحماية warn|delete|remove|block`,
+      `┃ 14) ${prefix}عدد_التحذيرات 3`,
+      `┃`,
+      `┃ 📥 الأدوات واللوحة`,
+      `┃ 15) ${prefix}tt <رابط>`,
+      `┃ 16) ${prefix}ig <رابط>`,
+      `┃ 17) ${prefix}pair 9677XXXXXXXX`,
+      `┃ 18) ${prefix}panel`,
+      `┃ 19) ${prefix}password 1234`,
+      `┃`,
+      `┃ 💡 ملاحظات`,
+      `┃ • تم جعل القائمة نصية مرتبة وواضحة داخل الشات نفسه`,
+      `┃   حتى تظهر دائماً حتى لو لم يدعم واتساب القائمة التفاعلية.`,
+      `┃ • تعمل الأوامر من رسالة الرقم نفسه فقط.`,
+      `┃ • يمكنك أيضاً كتابة help أو .help أو .help.`,
+      `┃`,
+      `┃ 🌐 لوحة الإعدادات: ${panelUrl}`,
+      `╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯`,
     ].join('\n')
   }
 

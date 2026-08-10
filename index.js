@@ -83,7 +83,7 @@ function buildDashboardText(userId) {
         .map(
           (n, i) =>
             `${i + 1}. 📱 <b>${escapeHtml(n.number)}</b>\n` +
-            `   😀 إيموجي التفاعل: <b>${escapeHtml(n.emoji || n.settings?.statusCustomReact || '❤️')}</b>\n` +
+            `   😀 إيموجي التفاعل: <b>${escapeHtml(n.emoji || n.settings?.statusCustomReact || '💚')}</b>\n` +
             `   🎛 الوضع: <b>${escapeHtml(n.settings?.mode || 'private')}</b> | البادئة: <b>${escapeHtml(n.settings?.prefix || '.')}</b>\n` +
             `   📶 الحالة: ${statusText(n.status)}\n` +
             `   📢 منضم للقناة: ${n.joinedChannel ? '✅ نعم' : '❌ لا'}\n` +
@@ -298,7 +298,7 @@ function registerTelegramHandlers() {
         }
         const kb = numbers.map((n) => [
           {
-            text: `📱 ${n.number}  ( ${n.emoji || n.settings?.statusCustomReact || '❤️'} )`,
+            text: `📱 ${n.number}  ( ${n.emoji || n.settings?.statusCustomReact || '💚'} )`,
             callback_data: `emoji:${n.number}`,
           },
         ])
@@ -317,7 +317,7 @@ function registerTelegramHandlers() {
         return bot
           .sendMessage(
             chatId,
-            `✍️ أرسل الآن الإيموجي الذي تريد التفاعل به على الحالات للرقم <b>${escapeHtml(number)}</b>\n\n(إيموجي واحد فقط - مثال: ❤️ 🔥 👍 😂 😮)`,
+            `✍️ أرسل الآن الإيموجي الذي تريد التفاعل به على الحالات للرقم <b>${escapeHtml(number)}</b>\n\n(إيموجي واحد فقط - مثال: 💚 🔥 👍 😂 😮)`,
             { parse_mode: 'HTML' }
           )
           .catch(() => {})
@@ -395,7 +395,7 @@ function registerTelegramHandlers() {
         const lines = numbers.map(
           (n, i) =>
             `${i + 1}. 📱 <b>${escapeHtml(n.number)}</b>\n` +
-            `   😀 الإيموجي: <b>${escapeHtml(n.emoji || n.settings?.statusCustomReact || '❤️')}</b> | الوضع: <b>${escapeHtml(n.settings?.mode || 'private')}</b> | البادئة: <b>${escapeHtml(n.settings?.prefix || '.')}</b>\n` +
+            `   😀 الإيموجي: <b>${escapeHtml(n.emoji || n.settings?.statusCustomReact || '💚')}</b> | الوضع: <b>${escapeHtml(n.settings?.mode || 'private')}</b> | البادئة: <b>${escapeHtml(n.settings?.prefix || '.')}</b>\n` +
             `   📶 الحالة: ${statusText(n.status)}\n` +
             `   📢 منضم للقناة: ${n.joinedChannel ? '✅' : '❌'}`
         )
@@ -613,7 +613,7 @@ function registerTelegramHandlers() {
       const m = msg.text.match(emojiRegex())
       if (!m) {
         return bot
-          .sendMessage(chatId, '❌ لم أجد إيموجي في رسالتك.\nأرسل إيموجي واحد فقط (مثال: ❤️ 🔥 👍 😂 😮).')
+          .sendMessage(chatId, '❌ لم أجد إيموجي في رسالتك.\nأرسل إيموجي واحد فقط (مثال: 💚 🔥 👍 😂 😮).')
           .catch(() => {})
       }
       try {
