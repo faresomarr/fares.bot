@@ -751,6 +751,24 @@ const PROTECTION_TOGGLE_COMMANDS = {
   حفظ_المحذوف: 'antiDelete',
   anticall: 'antiCall',
   antiviewonce: 'antiViewOnce',
+  // إخفاء صحّي الاستلام والقراءة (اسم الإعداد: disableReadReceipts)
+  إخفاءالصحين: 'disableReadReceipts',
+  إخفاء_الصحين: 'disableReadReceipts',
+  اخفاءالصحين: 'disableReadReceipts',
+  اخفاء_الصحين: 'disableReadReceipts',
+  اخفاالصحين: 'disableReadReceipts',
+  اخفا_الصحين: 'disableReadReceipts',
+  إخفاءالصحين: 'disableReadReceipts',
+  إخفاء_الصحين: 'disableReadReceipts',
+  اخفاءالصحين: 'disableReadReceipts',
+  اخفاء_الصحين: 'disableReadReceipts',
+  الصحين: 'disableReadReceipts',
+  الاخفاء: 'disableReadReceipts',
+  hidereceipts: 'disableReadReceipts',
+  hideblue: 'disableReadReceipts',
+  disablereceipts: 'disableReadReceipts',
+  بلوك: 'disableReadReceipts',
+  الصح: 'disableReadReceipts',
 }
 
 // مهارات التعرف على الإعدادات (synonyms)
@@ -814,7 +832,40 @@ const PHONE_SYNONYMS = {
   aiReplyScope: ['aireplyscope', 'نطاق.رد.ذكي', 'aiReplyScope'],
   aliveMsg: ['alivemsg', 'رسالة.alive', 'aliveMsg'],
   voiceFooter: ['voicefooter', 'فوتر.صوتي', 'voiceFooter'],
+  disableReadReceipts: [
+    'disablereceipts',
+    'hidereceipts',
+    'إخفاءالصحين',
+    'إخفاءالصحين',
+    'إخفاء_الصحين',
+    'اخفاءالصحين',
+    'إخفاءالصحين',
+    'الصحين',
+    'disableReadReceipts',
+  ],
 }
+
+// مفاتيح الأمر العربي الخاص بإخفاء الصحّين - نعالجها قبل الخريطة العامة
+const HIDE_RECEIPTS_COMMANDS = new Set([
+  'إخفاءالصحين',
+  'إخفاء_الصحين',
+  'اخفاءالصحين',
+  'اخفاء_الصحين',
+  'اخفاءالصحين',
+  'اخفاء_الصحين',
+  'اخفاالصحين',
+  'اخفا_الصحين',
+  'إخفاءالصحين',
+  'إخفاء_الصحين',
+  'إخفاء',
+  'اخفاء',
+  'الصحين',
+  'إخفاالصحين',
+  'إخفا_الصحين',
+  'hidereceipts',
+  'hideblue',
+  'disablereceipts',
+])
 
 function normalizeKey(rawKey) {
   const cleaned = String(rawKey || '').trim().toLowerCase().replace(/[\s\-_.]+/g, '')
@@ -2318,6 +2369,7 @@ class WaSession {
         `autoReact: ${s.autoReact || 'off'}`,
         `autoReply: ${s.autoReply || 'off'}`,
         `antiCall: ${s.antiCall || 'off'}`,
+        `disableReadReceipts: ${s.disableReadReceipts === 'on' ? 'on' : 'off'}`,
         `language: ${s.language || 'arabic'}`,
         ``,
         `استخدم: ${prefix}set <key> <value>`,
@@ -2405,6 +2457,42 @@ class WaSession {
       db.setPhoneSetting(this.userId, this.number, 'autoReply', normalized)
       await reply(`✅ تم ${normalized === 'on' ? 'تفعيل' : 'إيقاف'} الرد الآلي على الرسائل الخاصة.
 يمكنك إضافة ردود مخصصة من الإعداد customAutoReplies بصيغة: كلمة=الرد`)
+      return true
+    }
+
+    // معالج مخصّص لأمر «إخفاء_الصحين» بحيث يستجيب بالضبط لجميع الأشكال
+    // (مع/بدون underscore، بفاصلة أو بدون، همزة إ/ا) ويعطي رسالة عربية واضحة.
+    // هذا يصلح المشكلة التي كانت تجعل هذا الأمر لا يستجيب أصلاً.
+    if (HIDE_RECEIPTS_COMMANDS.has(cmd) || HIDE_RECEIPTS_COMMANDS.has(cmd.replace(/[\s_\-_.]/g, ''))) {
+      const normalized = normalizeOnOffValue(rest)
+      if (!normalized) {
+        await reply(
+          `❌ الاستخدام: ${prefix}إخفاء_الصحين تشغيل|ايقاف\n` +
+            `• تشغيل → لن يظهر للمرسل سوى صحّ واحد ولن يعرف إنك قرأت الرسالة.\n` +
+            `• ايقاف → تعود الصحّان للظهور بشكل طبيعي.`
+        )
+        return true
+      }
+      db.setPhoneSetting(this.userId, this.number, 'disableReadReceipts', normalized)
+      try {
+        // ضمان قراءة الإعداد فوراً عند ورود أي رسالة لاحقة
+        if (this.sock && typeof this.sock.readMessages === 'function') {
+          // لا نُرسل شيئاً هنا، نكتفي بتأكيد الحفظ
+        }
+      } catch {}
+      if (normalized === 'on') {
+        await reply(
+          `✅ تم تفعيل إخفاء صحّي الاستلام والقراءة على الرقم ${this.number}.\n` +
+            `👁 لن يظهر للمرسل سوى صحّ واحد، ولن يعرف إنك قرأت رسالته.\n` +
+            `💡 يستمر الإخفاء طالما هذا الإعداد مفعّل. ولإعادته:` +
+            ` ${prefix}إخفاء_الصحين ايقاف`
+        )
+      } else {
+        await reply(
+          `✅ تم إيقاف إخفاء الصحّين على الرقم ${this.number}.\n` +
+            `📨 ستظهر الصحّان الآن عند المرسلين بشكل طبيعي.`
+        )
+      }
       return true
     }
 
