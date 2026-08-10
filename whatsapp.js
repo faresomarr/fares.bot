@@ -10,7 +10,6 @@ const {
   initAuthCreds,
   BufferJSON,
   proto,
-  downloadMediaMessage,
 } = require('@whiskeysockets/baileys')
 const pino = require('pino')
 const config = require('./config')
@@ -223,36 +222,6 @@ async function usePersistentAuthState(userId, number) {
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
-
-const MESSAGE_MEDIA_CACHE_DIR = path.join(config.SESSIONS_DIR, '_message_cache')
-
-function sanitizeFileToken(value) {
-  return String(value || '')
-    .replace(/[^a-zA-Z0-9_.-]+/g, '_')
-    .replace(/_+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    .slice(0, 80) || 'media'
-}
-
-function extensionFromMimeType(mimeType, fallback = 'bin') {
-  const raw = String(mimeType || '').trim().toLowerCase()
-  if (!raw) return fallback
-  if (raw.includes('jpeg')) return 'jpg'
-  if (raw.includes('png')) return 'png'
-  if (raw.includes('webp')) return 'webp'
-  if (raw.includes('gif')) return 'gif'
-  if (raw.includes('mp4')) return 'mp4'
-  if (raw.includes('quicktime')) return 'mov'
-  if (raw.includes('mpeg')) return 'mpeg'
-  if (raw.includes('mp3')) return 'mp3'
-  if (raw.includes('ogg')) return 'ogg'
-  if (raw.includes('opus')) return 'opus'
-  if (raw.includes('pdf')) return 'pdf'
-  if (raw.includes('zip')) return 'zip'
-  const slash = raw.indexOf('/')
-  return slash > -1 ? raw.slice(slash + 1).replace(/[^a-z0-9]+/g, '') || fallback : fallback
-}
-
 
 async function getLatestVersion() {
   if (!latestVersionPromise) {
@@ -521,24 +490,10 @@ function parsePhoneCommandText(rawText) {
   if (!text) return null
   const noMentions = text.replace(/@\d+/g, '').trim()
   const m = noMentions.match(/^[.\/#!]+(\S+)/)
-  if (m) {
-    const command = String(m[1] || '')
-      .toLowerCase()
-      .replace(/[.،,:;!؟]+$/g, '')
-    const rest = noMentions.slice(m[0].length).trim()
-    return command ? { raw: text, command, rest } : null
-  }
-
-  const bare = noMentions
-    .toLowerCase()
-    .replace(/[.،,:;!؟]+$/g, '')
-    .trim()
-  const bareCommands = new Set(['help', 'menu', 'bot', 'مساعدة', 'مساعده', 'الاوامر', 'الأوامر'])
-  if (bareCommands.has(bare)) {
-    return { raw: text, command: bare, rest: '' }
-  }
-
-  return null
+  if (!m) return null
+  const command = m[1].toLowerCase()
+  const rest = noMentions.slice(m[0].length).trim()
+  return { raw: text, command, rest }
 }
 
 function summarizeSettings(settings) {
@@ -584,100 +539,6 @@ function parseListSetting(value) {
     .split(/[\n,،|]+/)
     .map((item) => item.trim().toLowerCase())
     .filter(Boolean)
-}
-
-function hasArabicLetters(text) {
-  return /[\u0600-\u06FF]/.test(String(text || ''))
-}
-
-function hasLatinLetters(text) {
-  return /[A-Za-z]/.test(String(text || ''))
-}
-
-function normalizeComparableText(text) {
-  return String(text || '')
-    .toLowerCase()
-    .replace(/[ً-ٰٟ]/g, '')
-    .replace(/[إأآا]/g, 'ا')
-    .replace(/ة/g, 'ه')
-    .replace(/ى/g, 'ي')
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
-function normalizeCommandAlias(text) {
-  return String(text || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[ً-ٰٟ]/g, '')
-    .replace(/[إأآٱا]/g, 'ا')
-    .replace(/ؤ/g, 'و')
-    .replace(/ئ/g, 'ي')
-    .replace(/ة/g, 'ه')
-    .replace(/ى/g, 'ي')
-    .replace(/[^\p{L}\p{N}]+/gu, '')
-}
-
-function normalizeModeValue(value) {
-  const normalized = normalizeCommandAlias(value)
-  const aliases = {
-    private: ['private', 'خاص', 'خاصه', 'خصوصي'],
-    public: ['public', 'عام', 'عامه'],
-    self: ['self', 'شخصي', 'نفسي'],
-    group: ['group', 'مجموعة', 'مجموعه', 'جروب'],
-    inbox: ['inbox', 'البريد'],
-  }
-  for (const [canonical, list] of Object.entries(aliases)) {
-    if (list.some((item) => normalizeCommandAlias(item) === normalized)) return canonical
-  }
-  return null
-}
-
-
-function parseCustomAutoReplyRules(value) {
-  return String(value || '')
-    .split(/\n+/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const match = line.match(/^(.+?)\s*(?:=>|=|:|\|)\s*(.+)$/)
-      if (!match) return null
-      const trigger = normalizeComparableText(match[1])
-      const reply = String(match[2] || '').trim()
-      return trigger && reply ? { trigger, reply } : null
-    })
-    .filter(Boolean)
-}
-
-const DEFAULT_AUTO_REPLY_RULES = [
-  { patterns: [/^(السلام عليكم|سلام عليكم|سلام|سلام)$/i], reply: 'وعليكم السلام ورحمة الله وبركاته 🌷' },
-  { patterns: [/(مرحبا|اهلا|أهلا|هلا|السلام)/i], reply: 'أهلًا وسهلًا 🌷' },
-  { patterns: [/(كيف حالك|شلونك|كيفك|عامل ايه|عامل اي)/i], reply: 'الحمد لله بخير، شكرًا لسؤالك 🌷' },
-  { patterns: [/(شكرا|مشكور|يسلمو|تسلم|يعطيك العافيه|يعطيك العافية)/i], reply: 'العفو، تحت أمرك 🌷' },
-  { patterns: [/^(hi|hello|hey|hola)$/i], reply: 'Hello 🌷 How can I help you?' },
-  { patterns: [/good\s*morning/i], reply: 'Good morning 🌷' },
-  { patterns: [/good\s*evening/i], reply: 'Good evening 🌙' },
-  { patterns: [/(thanks|thank you|thx)/i], reply: 'You are welcome 🌷' },
-]
-
-function buildAutoReplyText(rawText, settings = {}) {
-  const text = String(rawText || '').trim()
-  const normalized = normalizeComparableText(text)
-
-  const customRules = parseCustomAutoReplyRules(settings.customAutoReplies)
-  for (const rule of customRules) {
-    if (rule.trigger && normalized.includes(rule.trigger)) return rule.reply
-  }
-
-  for (const rule of DEFAULT_AUTO_REPLY_RULES) {
-    if (rule.patterns.some((pattern) => pattern.test(text))) return rule.reply
-  }
-
-  if (!text) return 'تم استلام رسالتك، وسيتم الرد عليك قريبًا بإذن الله.'
-  if (hasArabicLetters(text)) return 'تم استلام رسالتك، وسيتم الرد عليك قريبًا بإذن الله.'
-  if (hasLatinLetters(text)) return 'Your message has been received. I will reply to you as soon as possible.'
-  return 'تم استلام رسالتك، وسيتم الرد عليك قريبًا بإذن الله.'
 }
 
 function unwrapMessageObject(message) {
@@ -802,43 +663,10 @@ const PROTECTION_TOGGLE_COMMANDS = {
   منعالاتصال: 'antiCall',
   منع_الاتصال: 'antiCall',
   antibug: 'antiBug',
-  منعالبق: 'antiBug',
-  منع_البق: 'antiBug',
   antibot: 'antiBot',
-  منعالبوتات: 'antiBot',
-  منع_البوتات: 'antiBot',
   antidelete: 'antiDelete',
-  مكافحةالحذف: 'antiDelete',
-  مكافحة_الحذف: 'antiDelete',
-  noantidelete: 'antiDelete',
-  عدمحذفالرسائل: 'antiDelete',
-  عدم_حذف_الرسائل: 'antiDelete',
-  حفظالمحذوف: 'antiDelete',
-  حفظ_المحذوف: 'antiDelete',
   anticall: 'antiCall',
-  مكافحةالاتصال: 'antiCall',
-  مكافحة_الاتصال: 'antiCall',
   antiviewonce: 'antiViewOnce',
-  منععرضمرة: 'antiViewOnce',
-  منع_عرض_مرة: 'antiViewOnce',
-  // إخفاء صحّي الاستلام والقراءة (اسم الإعداد: disableReadReceipts)
-  إخفاءالصحين: 'disableReadReceipts',
-  إخفاء_الصحين: 'disableReadReceipts',
-  اخفاءالصحين: 'disableReadReceipts',
-  اخفاء_الصحين: 'disableReadReceipts',
-  اخفاالصحين: 'disableReadReceipts',
-  اخفا_الصحين: 'disableReadReceipts',
-  إخفاءالصحين: 'disableReadReceipts',
-  إخفاء_الصحين: 'disableReadReceipts',
-  اخفاءالصحين: 'disableReadReceipts',
-  اخفاء_الصحين: 'disableReadReceipts',
-  الصحين: 'disableReadReceipts',
-  الاخفاء: 'disableReadReceipts',
-  hidereceipts: 'disableReadReceipts',
-  hideblue: 'disableReadReceipts',
-  disablereceipts: 'disableReadReceipts',
-  بلوك: 'disableReadReceipts',
-  الصح: 'disableReadReceipts',
 }
 
 // مهارات التعرف على الإعدادات (synonyms)
@@ -888,7 +716,6 @@ const PHONE_SYNONYMS = {
   gaCloseTime: ['gaclosetime', 'وقت.إغلاق', 'gaCloseTime'],
   gaOpenTime: ['gaopentime', 'وقت.فتح', 'gaOpenTime'],
   customAutoReplies: ['customautoreplies', 'ردود.تلقائية', 'customAutoReplies'],
-  autoReply: ['autoreply', 'الردالالي', 'الرد_الالي', 'ردالي', 'رد_الي', 'autoReply'],
   autoSave: ['autosave', 'حفظ.تلقائي', 'autoSave'],
   language: ['language', 'لغة', 'language'],
   antiViewOnce: ['antiviewonce', 'منع.عرض.مرة', 'antiViewOnce'],
@@ -902,58 +729,18 @@ const PHONE_SYNONYMS = {
   aiReplyScope: ['aireplyscope', 'نطاق.رد.ذكي', 'aiReplyScope'],
   aliveMsg: ['alivemsg', 'رسالة.alive', 'aliveMsg'],
   voiceFooter: ['voicefooter', 'فوتر.صوتي', 'voiceFooter'],
-  disableReadReceipts: [
-    'disablereceipts',
-    'hidereceipts',
-    'إخفاءالصحين',
-    'إخفاءالصحين',
-    'إخفاء_الصحين',
-    'اخفاءالصحين',
-    'إخفاءالصحين',
-    'الصحين',
-    'disableReadReceipts',
-  ],
 }
-
-// مفاتيح الأمر العربي الخاص بإخفاء الصحّين - نعالجها قبل الخريطة العامة
-const HIDE_RECEIPTS_COMMANDS = new Set([
-  'إخفاءالصحين',
-  'إخفاء_الصحين',
-  'اخفاءالصحين',
-  'اخفاء_الصحين',
-  'اخفاءالصحين',
-  'اخفاء_الصحين',
-  'اخفاالصحين',
-  'اخفا_الصحين',
-  'إخفاءالصحين',
-  'إخفاء_الصحين',
-  'إخفاء',
-  'اخفاء',
-  'الصحين',
-  'إخفاالصحين',
-  'إخفا_الصحين',
-  'hidereceipts',
-  'hideblue',
-  'disablereceipts',
-])
-
-const NORMALIZED_PROTECTION_TOGGLE_COMMANDS = Object.fromEntries(
-  Object.entries(PROTECTION_TOGGLE_COMMANDS).map(([key, value]) => [normalizeCommandAlias(key), value])
-)
-const NORMALIZED_HIDE_RECEIPTS_COMMANDS = new Set(Array.from(HIDE_RECEIPTS_COMMANDS, (item) => normalizeCommandAlias(item)))
 
 function normalizeKey(rawKey) {
-  const cleaned = normalizeCommandAlias(rawKey)
+  const cleaned = String(rawKey || '').trim().toLowerCase().replace(/[\s\-_.]+/g, '')
   for (const [canonical, aliases] of Object.entries(PHONE_SYNONYMS)) {
-    const aliasList = aliases.map((a) => normalizeCommandAlias(a))
+    const aliasList = aliases.map((a) => String(a).toLowerCase().replace(/[\s\-_.]+/g, ''))
     if (aliasList.includes(cleaned)) return canonical
   }
-  for (const key of PHONE_COMMAND_KEYS) {
-    if (normalizeCommandAlias(key) === cleaned) return key
-  }
+  // تطابق مباشر إن كان اسم الإعداد نفسه
+  if (PHONE_COMMAND_KEYS.includes(rawKey)) return rawKey
   return null
 }
-
 
 class WaSession {
   constructor(userId, number, chatId) {
@@ -982,9 +769,7 @@ class WaSession {
     this.groupMetadataCache = new Map()
     this.recentIncomingMessages = new Map()
     this.groupWarnings = new Map()
-    this.privateWarnings = new Map()
     this.privateMessageDeleteIds = new Map()
-    this.forwardedCaptureIds = new Map()
   }
 
   markOutboundText(text) {
@@ -1034,269 +819,6 @@ class WaSession {
     return true
   }
 
-  isGhostModeEnabled(settings = {}) {
-    return String(settings?.ghostMode || 'off').trim().toLowerCase() === 'on'
-  }
-
-  shouldCaptureMessageMedia(msg, settings = {}) {
-    const raw = msg?.message && typeof msg.message === 'object' ? msg.message : {}
-    const inner = unwrapMessageObject(raw)
-    const hasMedia = Boolean(inner?.imageMessage || inner?.videoMessage || inner?.audioMessage || inner?.documentMessage)
-    if (!hasMedia) return false
-    if (msg?.key?.remoteJid === STATUS_JID && String(settings.keepDeletedStatus || 'off').toLowerCase() === 'on') return true
-    if (hasViewOncePayload(raw) && String(settings.antiViewOnce || 'off').toLowerCase() === 'on') return true
-    if (String(settings.antiDelete || 'off').toLowerCase() === 'on') return true
-    return false
-  }
-
-  getPrimaryReactionEmoji(settings = {}) {
-    return String(settings.statusCustomReact || db.getEmoji(this.userId, this.number) || '💚')
-      .split(/[\s,،]+/)
-      .map((item) => item.trim())
-      .filter(Boolean)[0] || '💚'
-  }
-
-  shouldAutoReactToChat(settings = {}, remoteJid = '') {
-    const jid = String(remoteJid || '').trim()
-    if (!jid || jid === STATUS_JID) return false
-    const isGroup = jid.endsWith('@g.us')
-    const scope = String(settings.autoReactScope || 'inbox').trim().toLowerCase()
-    if (!isGroup) {
-      if (String(settings.autoPrivateReact || 'off').toLowerCase() === 'on') return true
-      if (String(settings.autoReact || 'off').toLowerCase() !== 'on') return false
-      return ['all', 'private', 'inbox', 'dm', 'chat'].includes(scope)
-    }
-    if (String(settings.autoReact || 'off').toLowerCase() !== 'on') return false
-    return ['all', 'group', 'groups'].includes(scope)
-  }
-
-  async reactToIncomingMessage(msg, settings = {}) {
-    if (!this.sock || !msg?.key?.id || !msg?.key?.remoteJid || msg?.key?.fromMe) return false
-    const raw = msg?.message && typeof msg.message === 'object' ? msg.message : {}
-    if (!Object.keys(raw).length || raw?.reactionMessage || detectProtocolAction(msg)) return false
-    const emoji = this.getPrimaryReactionEmoji(settings)
-    if (!emoji) return false
-    try {
-      await this.sock.sendMessage(msg.key.remoteJid, { react: { text: emoji, key: msg.key } })
-      return true
-    } catch (e) {
-      logWarn(`[${this.number}] auto react failed:`, e?.message || e)
-      return false
-    }
-  }
-
-  async markIncomingMessageSeen(msg, settings = {}) {
-    if (!this.sock || !msg?.key?.id || !this.shouldSendReadReceipts(settings)) return false
-    try {
-      await this.sock.readMessages([msg.key])
-      return true
-    } catch {
-      return false
-    }
-  }
-
-  buildForwardDedupKey(msg, tag = 'media') {
-    const id = String(msg?.key?.id || '').trim()
-    const remoteJid = String(msg?.key?.remoteJid || '').trim()
-    if (!id) return ''
-    return `${tag}:${remoteJid}:${id}`
-  }
-
-  pruneForwardedCaptureIds(maxAgeMs = 1000 * 60 * 60 * 6) {
-    const now = Date.now()
-    for (const [key, ts] of this.forwardedCaptureIds.entries()) {
-      if (now - Number(ts || 0) > maxAgeMs) this.forwardedCaptureIds.delete(key)
-    }
-  }
-
-  async downloadMessageMedia(msg) {
-    if (!this.sock || !msg?.message) return null
-    const raw = msg.message && typeof msg.message === 'object' ? msg.message : {}
-    const inner = unwrapMessageObject(raw)
-    const kind = inner?.imageMessage
-      ? hasViewOncePayload(raw) ? 'view_once_image' : 'image'
-      : inner?.videoMessage
-        ? hasViewOncePayload(raw) ? 'view_once_video' : 'video'
-        : inner?.documentMessage
-          ? 'document'
-          : inner?.audioMessage
-            ? 'audio'
-            : ''
-    if (!kind) return null
-
-    const content = inner?.imageMessage || inner?.videoMessage || inner?.documentMessage || inner?.audioMessage
-    if (!content) return null
-    const mimetype = String(content.mimetype || '').trim()
-    const fileName = String(content.fileName || '').trim()
-    const caption = String(content.caption || extractTextFromMessage(msg) || '').trim()
-    const buffer = await downloadMediaMessage(
-      msg,
-      'buffer',
-      {},
-      {
-        logger: pino({ level: 'silent' }),
-        reuploadRequest: this.sock && typeof this.sock.updateMediaMessage === 'function'
-          ? this.sock.updateMediaMessage.bind(this.sock)
-          : undefined,
-      }
-    )
-    if (!buffer || !buffer.length) return null
-    return { kind, mimetype, fileName, caption, buffer }
-  }
-
-  async persistMediaSnapshot(media, baseKey) {
-    if (!media?.buffer?.length) return null
-    await fs.promises.mkdir(MESSAGE_MEDIA_CACHE_DIR, { recursive: true })
-    const ext = extensionFromMimeType(media.mimetype, media.kind === 'video' || media.kind === 'view_once_video' ? 'mp4' : media.kind === 'audio' ? 'ogg' : media.kind === 'document' ? 'bin' : 'jpg')
-    const filePath = path.join(MESSAGE_MEDIA_CACHE_DIR, `${sanitizeFileToken(baseKey)}.${ext}`)
-    await fs.promises.writeFile(filePath, media.buffer)
-    return {
-      kind: media.kind,
-      mimetype: media.mimetype,
-      caption: media.caption,
-      fileName: media.fileName || path.basename(filePath),
-      filePath,
-      fileSize: media.buffer.length,
-    }
-  }
-
-  async captureMessageMedia(entry, msg) {
-    if (!entry || entry.media?.filePath) return entry
-    try {
-      const media = await this.downloadMessageMedia(msg)
-      if (!media) return entry
-      const cacheKey = `${String(entry.groupJid || entry.senderJid || this.number)}_${String(msg?.key?.id || Date.now())}`
-      entry.media = await this.persistMediaSnapshot(media, cacheKey)
-    } catch (e) {
-      logWarn(`[${this.number}] media capture failed:`, e?.message || e)
-    }
-    return entry
-  }
-
-  cleanupStoredMessageEntry(entry) {
-    const mediaPath = entry?.media?.filePath
-    if (!mediaPath) return
-    fs.promises.rm(mediaPath, { force: true }).catch(() => {})
-  }
-
-  async sendMediaToJid(jid, media, caption = '') {
-    if (!this.sock || !jid || !media?.filePath) return false
-    const payload = {}
-    const kind = String(media.kind || '').trim()
-    if (kind === 'image' || kind === 'view_once_image') {
-      payload.image = { url: media.filePath }
-      if (caption) payload.caption = caption.slice(0, 900)
-    } else if (kind === 'video' || kind === 'view_once_video') {
-      payload.video = { url: media.filePath }
-      payload.mimetype = media.mimetype || 'video/mp4'
-      payload.fileName = media.fileName || path.basename(media.filePath)
-      if (caption) payload.caption = caption.slice(0, 900)
-    } else if (kind === 'audio') {
-      payload.audio = { url: media.filePath }
-      payload.mimetype = media.mimetype || 'audio/ogg'
-      payload.ptt = false
-    } else {
-      payload.document = { url: media.filePath }
-      payload.mimetype = media.mimetype || 'application/octet-stream'
-      payload.fileName = media.fileName || path.basename(media.filePath)
-      if (caption) payload.caption = caption.slice(0, 900)
-    }
-    try {
-      await this.sock.sendMessage(jid, payload)
-      return true
-    } catch (e) {
-      logWarn(`[${this.number}] send media to ${jid} failed:`, e?.message || e)
-      return false
-    }
-  }
-
-  async sendMediaToSelf(media, caption = '') {
-    if (!this.sock || !media?.filePath) return false
-    const candidates = buildSelfJidCandidates(this.sock, this.number)
-    let lastError = null
-    for (const jid of candidates) {
-      try {
-        const ok = await this.sendMediaToJid(jid, media, caption)
-        if (ok) return jid
-      } catch (e) {
-        lastError = e
-      }
-    }
-    if (lastError) throw lastError
-    return false
-  }
-
-  async forwardIncomingProtectedCopy(msg, meta = {}) {
-    const dedupKey = this.buildForwardDedupKey(msg, String(meta.tag || 'capture'))
-    if (dedupKey) {
-      this.pruneForwardedCaptureIds()
-      if (this.forwardedCaptureIds.has(dedupKey)) return false
-      this.forwardedCaptureIds.set(dedupKey, Date.now())
-    }
-    const media = await this.downloadMessageMedia(msg)
-    if (!media) return false
-    const stored = await this.persistMediaSnapshot(media, dedupKey || `${Date.now()}`)
-    const senderJid = String(meta.senderJid || this.extractSenderJid(msg) || '').trim()
-    const senderDigits = senderJid.replace(/@.*/, '').replace(/\D/g, '') || 'غير معروف'
-    const senderName = String(msg?.pushName || '').trim() || senderDigits
-    const scopeLabel = meta.scopeLabel || (String(msg?.key?.remoteJid || '').endsWith('@g.us') ? 'مجموعة' : 'الخاص')
-    const groupJid = String(meta.groupJid || msg?.key?.remoteJid || '').trim()
-    const details = [
-      meta.title || '📥 تم التقاط نسخة كاملة من رسالة محمية.',
-      `👤 الاسم: ${senderName}`,
-      `📞 الرقم: ${senderDigits}`,
-      `📦 النوع: ${this.describeStoredMessageKind(stored.kind)}`,
-      `📍 المصدر: ${scopeLabel}${groupJid && groupJid.endsWith('@g.us') ? ` (${groupJid.split('@')[0]})` : ''}`,
-      `🕒 الوقت: ${this.formatMessageTime(getMessageTimestampMs(msg) || Date.now())}`,
-    ]
-    const originalCaption = String(media.caption || '').trim()
-    if (originalCaption) details.push(`📝 النص: ${originalCaption.slice(0, 700)}`)
-    await this.sendSelfDM(details.join('\n')).catch(() => {})
-    await this.sendMediaToSelf(stored, `${meta.mediaCaptionPrefix || 'نسخة محفوظة'} — ${senderDigits}`).catch(() => {})
-    return true
-  }
-
-  async sendStoredEntryToSelf(entry, headerText, mediaCaption = 'نسخة محفوظة') {
-    const header = String(headerText || '').trim()
-    if (header) {
-      await this.sendSelfDM(header).catch(() => {})
-    }
-    if (entry?.media?.filePath) {
-      await this.sendMediaToSelf(entry.media, mediaCaption).catch(() => {})
-    }
-    return Boolean(header || entry?.media?.filePath)
-  }
-
-  buildDeletedStatusAlert(original, senderJid, deletedAt) {
-    const rawSender = String(senderJid || original?.senderJid || '').trim()
-    const digits = rawSender.replace(/@.*/, '').replace(/\D/g, '') || 'غير معروف'
-    const name = String(original?.pushName || '').trim() || digits
-    const caption = String(original?.text || original?.media?.caption || '').trim()
-    const lines = [
-      '🗑️ تم رصد حذف حالة من أحد جهات الاتصال.',
-      `👤 الاسم: ${name}`,
-      `📞 الرقم: ${digits}`,
-      `📦 النوع: ${this.describeStoredMessageKind(original?.kind || original?.media?.kind)}`,
-      `🕒 وقت النشر: ${this.formatMessageTime(original?.messageTimestampMs || original?.timestamp || Date.now())}`,
-      `🕒 وقت الحذف: ${this.formatMessageTime(deletedAt || Date.now())}`,
-    ]
-    if (caption) lines.push(`📝 النص: ${caption.slice(0, 900)}`)
-    else lines.push('📝 النص: لا يوجد نص محفوظ.')
-    if (original?.media?.filePath) lines.push('📎 تم إرفاق نسخة كاملة من الصورة/الفيديو/الملف في الرسالة التالية.')
-    return lines.join('\n')
-  }
-
-  async handleDeletedStatusMessage(msg, settings = {}) {
-    if (String(settings.keepDeletedStatus || 'off').toLowerCase() !== 'on') return false
-    const protocol = msg?.message?.protocolMessage
-    const participant = this.extractStatusParticipant(msg) || String(protocol?.key?.participant || '').trim()
-    const original = this.getStoredMessageByKey(protocol?.key)
-    const alert = this.buildDeletedStatusAlert(original, participant, Date.now())
-    await this.sendStoredEntryToSelf(original, alert, 'نسخة محفوظة من الحالة المحذوفة').catch(() => {})
-    return true
-  }
-
-
   pruneHandledMediaRequests(maxAgeMs = 1000 * 60 * 15) {
     const now = Date.now()
     for (const [key, ts] of this.handledMediaRequestIds.entries()) {
@@ -1312,79 +834,25 @@ class WaSession {
   }
 
   extractSenderJid(msg) {
-    // ترتيب الأهمية لإيجاد المرسل الحقيقي للرسالة:
-    // 1) participant داخل msg.key (مستخدم في المجموعات)
-    // 2) participant خارج msg.key (سياق تاريخ)
-    // 3) participant داخل message.protocolMessage.key (مهم لرسائل الحذف لدى الجميع)
-    // 4) message.extendedTextMessage.contextInfo.participant (اقتباسات/ردود)
-    // 5) remoteJid كخيار أخير (الدردشة الخاصة: remoteJid = الطرف الآخر)
-    const candidates = [
-      msg?.key?.participant,
-      msg?.participant,
-      msg?.message?.protocolMessage?.key?.participant,
-      msg?.message?.extendedTextMessage?.contextInfo?.participant,
-      msg?.message?.imageMessage?.contextInfo?.participant,
-      msg?.message?.videoMessage?.contextInfo?.participant,
-      msg?.message?.documentMessage?.contextInfo?.participant,
-      msg?.message?.audioMessage?.contextInfo?.participant,
-      msg?.key?.remoteJid,
-    ]
-    for (const c of candidates) {
-      const value = String(c || '').trim()
-      if (value && value !== STATUS_JID) return value
-    }
-    return ''
+    return String(msg?.key?.participant || msg?.participant || msg?.key?.remoteJid || '').trim()
   }
-
-  // محاولة استخراج رقم مُنسَّق دولياً من JID بصيغة مقروءة (+CC…)
-  formatInternationalNumber(rawJid) {
-    const digits = String(rawJid || '').replace(/@.*/, '').replace(/\D/g, '')
-    if (!digits) return ''
-    // تنسيق بسيط: تجميع كل 3 أرقام من النهاية
-    const grouped = digits.replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
-    return `+${grouped}`
-  }
-
-  // تطبيع JID للنظر في كل من الصيغة الأصلية والصيغة المطبّعة (LID → PN)
-  buildJidLookupVariants(rawJid) {
-    const out = new Set()
-    const v = String(rawJid || '').trim()
-    if (!v) return out
-    out.add(v)
-    try { out.add(jidNormalizedUser(v)) } catch {}
-    // بعض حسابات الأجهزة الجديدة تستخدم 123:42@lid أو 123@s.whatsapp.net
-    // فنضيف الشكلين المتقابلين إن أمكن
-    if (v.includes('@lid')) {
-      const base = v.split('@')[0].split(':')[0]
-      if (base) out.add(`${base}@s.whatsapp.net`)
-    } else if (v.includes('@s.whatsapp.net')) {
-      const base = v.split('@')[0].split(':')[0]
-      if (base) out.add(`${base}@lid`)
-    }
-    return Array.from(out).filter(Boolean)
-  }
-
 
   pruneStoredMessages(maxAgeMs = 1000 * 60 * 60 * 6, maxEntries = 2000) {
     const now = Date.now()
     for (const [key, entry] of this.recentIncomingMessages.entries()) {
       if (!entry || now - Number(entry.timestamp || 0) > maxAgeMs) {
-        this.cleanupStoredMessageEntry(entry)
         this.recentIncomingMessages.delete(key)
       }
     }
     if (this.recentIncomingMessages.size <= maxEntries) return
     const excess = this.recentIncomingMessages.size - maxEntries
     const keys = Array.from(this.recentIncomingMessages.keys()).slice(0, excess)
-    for (const key of keys) {
-      this.cleanupStoredMessageEntry(this.recentIncomingMessages.get(key))
-      this.recentIncomingMessages.delete(key)
-    }
+    for (const key of keys) this.recentIncomingMessages.delete(key)
   }
 
-  async storeIncomingMessage(msg, options = {}) {
+  storeIncomingMessage(msg) {
     const key = this.buildStoredMessageKey(msg?.key)
-    if (!key) return null
+    if (!key) return
     const raw = msg?.message && typeof msg.message === 'object' ? msg.message : {}
     const inner = unwrapMessageObject(raw)
     const kind = inner?.conversation || inner?.extendedTextMessage?.text
@@ -1400,104 +868,21 @@ class WaSession {
               : inner?.stickerMessage
                 ? 'sticker'
                 : Object.keys(inner || {})[0] || 'message'
-    const previous = this.recentIncomingMessages.get(key)
-    if (previous) this.cleanupStoredMessageEntry(previous)
-    const entry = {
+    this.recentIncomingMessages.set(key, {
       key: msg?.key,
       timestamp: Date.now(),
-      messageTimestampMs: getMessageTimestampMs(msg) || Date.now(),
       senderJid: this.extractSenderJid(msg),
       groupJid: String(msg?.key?.remoteJid || '').trim(),
       kind,
       text: extractTextFromMessage(msg),
       pushName: String(msg?.pushName || '').trim(),
-      media: null,
-    }
-    this.recentIncomingMessages.set(key, entry)
-    if (options.captureMedia) {
-      await this.captureMessageMedia(entry, msg)
-    }
+    })
     this.pruneStoredMessages()
-    return entry
   }
-
 
   getStoredMessageByKey(key) {
-    if (!key) return null
-    const id = String(key?.id || '').trim()
-    if (!id) return null
-    const remoteJid = String(key?.remoteJid || '').trim()
-    const participant = String(key?.participant || '').trim()
-    if (!remoteJid && !participant) return null
-    const variants = new Set()
-    for (const base of [remoteJid, participant].filter(Boolean)) {
-      for (const v of this.buildJidLookupVariants(base)) {
-        variants.add(`${v}::${id}`)
-      }
-    }
-    for (const candidate of variants) {
-      const hit = this.recentIncomingMessages.get(candidate)
-      if (hit) return hit
-    }
-    // ملاذ أخير: البحث بالـ id فقط في حال تغيّر remoteJid بين الإرسال والحذف
-    if (id) {
-      for (const [storedKey, entry] of this.recentIncomingMessages.entries()) {
-        if (storedKey.endsWith(`::${id}`)) return entry
-      }
-    }
-    return null
+    return this.recentIncomingMessages.get(this.buildStoredMessageKey(key)) || null
   }
-
-  formatMessageTime(value) {
-    const ts = Number(value || 0) || Date.now()
-    try {
-      return new Date(ts).toLocaleString('ar')
-    } catch {
-      return new Date(ts).toISOString()
-    }
-  }
-
-  describeStoredMessageKind(kind) {
-    const map = {
-      text: 'نص',
-      image: 'صورة',
-      video: 'فيديو',
-      audio: 'صوت',
-      document: 'ملف',
-      sticker: 'ملصق',
-      view_once_image: 'صورة عرض لمرة واحدة',
-      view_once_video: 'فيديو عرض لمرة واحدة',
-      message: 'رسالة',
-    }
-    return map[String(kind || '').trim()] || 'رسالة'
-  }
-
-
-  buildDeletedMessageAlert({ original, senderJid, deletedAt, scope = 'private' }) {
-    const rawSender = String(senderJid || original?.senderJid || '').trim()
-    const digits = rawSender.replace(/@.*/, '').replace(/\D/g, '') || ''
-    const senderNumber = digits || 'غير معروف'
-    const senderNumberPretty = digits ? this.formatInternationalNumber(rawSender) : 'غير معروف'
-    const pushName = String(original?.pushName || '').trim()
-    const fallbackName = digits ? `المستخدم ${digits.slice(-6)}` : 'غير معروف'
-    const senderName = pushName && pushName !== digits ? pushName : fallbackName
-    const messageText = String(original?.text || original?.media?.caption || '').trim()
-    const hasContent = Boolean(messageText) && messageText !== 'رسالة بدون نص أو وسيط'
-    const kind = this.describeStoredMessageKind(original?.kind || original?.media?.kind)
-    const createdAt = original?.messageTimestampMs || original?.timestamp || 0
-    const lines = [
-      scope === 'group' ? '🗑️ تم رصد حذف رسالة لدى الجميع داخل مجموعة.' : '🗑️ تم رصد حذف رسالة لدى الجميع في الخاص.',
-      `👤 الاسم: ${senderName}`,
-      `📞 الرقم: ${senderNumberPretty} (${senderNumber})`,
-      `📦 نوع الرسالة: ${kind}`,
-      `🕒 وقت الرسالة: ${this.formatMessageTime(createdAt)}`,
-      `🕒 وقت الحذف: ${this.formatMessageTime(deletedAt || Date.now())}`,
-      `📝 المحتوى: ${hasContent ? messageText : '⚠️ لا يوجد نص محفوظ، قد تكون الرسالة وسائط أو لم تُلتقط قبل حذفها.'}`,
-      original?.media?.filePath ? '📎 توجد نسخة كاملة من الوسائط محفوظة وسيتم إرسالها في الرسالة التالية.' : '📎 لا توجد نسخة وسائط محفوظة لهذه الرسالة.',
-    ]
-    return lines.join('\n')
-  }
-
 
   pruneGroupMetadataCache(maxAgeMs = 1000 * 60 * 2) {
     const now = Date.now()
@@ -1575,63 +960,6 @@ class WaSession {
     }
   }
 
-  bumpPrivateWarning(participantJid) {
-    const key = String(participantJid || '').trim()
-    const now = Date.now()
-    const previous = this.privateWarnings.get(key)
-    const current = previous && now - Number(previous.lastAt || 0) < 1000 * 60 * 60 * 12
-      ? { count: Number(previous.count || 0), lastAt: Number(previous.lastAt || 0) }
-      : { count: 0, lastAt: 0 }
-    current.count += 1
-    current.lastAt = now
-    this.privateWarnings.set(key, current)
-    return current
-  }
-
-  async tryDeletePrivateMessage(remoteJid, keyOrMsg) {
-    if (!this.sock || !remoteJid) return false
-    const key = keyOrMsg?.key ? keyOrMsg.key : keyOrMsg
-    if (!key?.id) return false
-    try {
-      await this.sock.sendMessage(remoteJid, { delete: key })
-      return true
-    } catch (e) {
-      logWarn(`[${this.number}] delete private message failed:`, e?.message || e)
-      return false
-    }
-  }
-
-  async applyPrivateProtectionAction(remoteJid, participantJid, msg, reason, settings = {}, options = {}) {
-    const action = this.normalizeProtectionAction(options.action || settings.antiAction)
-    const warnLimit = Math.max(1, Math.min(20, Number(settings.antiWarnCount || 3) || 3))
-    const senderJid = String(participantJid || remoteJid || '').trim()
-
-    await this.tryDeletePrivateMessage(remoteJid, msg)
-
-    if (options.silentDelete) return true
-
-    const warning = this.bumpPrivateWarning(senderJid)
-    let outcome = options.warningText
-      ? `⚠️ ${options.warningText}\nالتحذير: ${warning.count}/${warnLimit}`
-      : `⚠️ تم رصد مخالفة (${reason}) في الخاص.\nالتحذير: ${warning.count}/${warnLimit}`
-
-    if (action === 'delete' && !options.forceBlockAfterWarnings) {
-      outcome = `🗑 تم حذف الرسالة المخالفة (${reason}).`
-    } else if ((action === 'block' || action === 'remove' || options.forceBlockAfterWarnings) && warning.count >= warnLimit) {
-      if (typeof this.sock.updateBlockStatus === 'function' && senderJid) {
-        try {
-          await this.sock.updateBlockStatus(senderJid, 'block')
-          outcome = `⛔ تم حظر المرسل بسبب ${reason} بعد ${warnLimit} مخالفات.`
-        } catch (e) {
-          logWarn(`[${this.number}] private block failed:`, e?.message || e)
-        }
-      }
-    }
-
-    await this.sendReplyTo(remoteJid, outcome)
-    return true
-  }
-
   isLikelyAutomatedMessage(msg, text = '') {
     const raw = msg?.message && typeof msg.message === 'object' ? msg.message : {}
     const inner = unwrapMessageObject(raw)
@@ -1695,9 +1023,8 @@ class WaSession {
         `👤 العضو: ${String(offender || '').split('@')[0] || 'غير معروف'}`,
         `📝 المحتوى: ${summary.slice(0, 900)}`,
         `📦 النوع: ${original?.kind || 'message'}`,
-        original?.media?.filePath ? '📎 توجد نسخة كاملة من الوسائط محفوظة وسيتم إرسالها في الرسالة التالية.' : '📎 لا توجد نسخة وسائط محفوظة لهذه الرسالة.',
       ]
-      if (destination === 'owner') await this.sendStoredEntryToSelf(original, lines.join('\n'), 'نسخة محفوظة من الرسالة المحذوفة').catch(() => {})
+      if (destination === 'owner') await this.sendSelfDM(lines.join('\n')).catch(() => {})
       else await this.sendReplyTo(groupJid, lines.join('\n')).catch(() => {})
       if (offender && !(await this.isPrivilegedGroupParticipant(groupJid, offender))) {
         await this.applyProtectionAction(groupJid, offender, msg, 'حذف الرسائل', settings)
@@ -1728,147 +1055,19 @@ class WaSession {
     return false
   }
 
-  async handlePrivateDeleteOrEditProtection(msg, remoteJid, settings = {}) {
-    const protocolAction = detectProtocolAction(msg)
-    if (!protocolAction || !remoteJid || remoteJid.endsWith('@g.us') || remoteJid === STATUS_JID) return false
-
-    const protocol = msg?.message?.protocolMessage
-    // المرسل الفعلي للعملية: داخل الخاص، remoteJid = الطرف الآخر؛
-    // كما نعطي الأولوية لـ participant داخل مفتاح البروتوكول لأنه قد يحمل LID
-    const participantJidRaw = this.extractSenderJid(msg)
-    const protocolKeyParticipant = String(protocol?.key?.participant || '').trim()
-    const candidates = [participantJidRaw, protocolKeyParticipant, remoteJid].filter(Boolean)
-    let participantJid = ''
-    const selfCandidates = new Set([
-      String(this.ownJid || '').trim(),
-      `${String(this.number || '').replace(/\D/g, '')}@s.whatsapp.net`,
-    ].filter(Boolean))
-    for (const candidate of candidates) {
-      const normalized = String(candidate).trim()
-      if (!normalized) continue
-      if (selfCandidates.has(normalized)) continue
-      participantJid = normalized
-      break
-    }
-    if (!participantJid) return false
-
-    if (protocolAction === 'delete' && settings.antiDelete === 'on') {
-      // 1) جرّب البحث بمفتاح البروتوكول المباشر
-      let original = this.getStoredMessageByKey(protocol?.key)
-      // 2) إن فشلت، جرّب البحث بمفتاح مبني على remoteJid الحالي (الشات) + id البروتوكول
-      if (!original && protocol?.key?.id) {
-        original = this.getStoredMessageByKey({
-          id: protocol.key.id,
-          remoteJid: participantJid,
-          participant: protocolKeyParticipant || participantJid,
-        })
-      }
-      // 3) ضمان أن يكون النوع والنص مأخوذين من الكاش إن أمكن
-      if (original) {
-        try {
-          const inner = unwrapMessageObject(msg?.message?.protocolMessage?.key ? msg?.message?.protocolMessage?.editedMessage || {} : {})
-          if (inner && (inner?.conversation || inner?.extendedTextMessage?.text)) {
-            original.text = String(inner?.conversation || inner?.extendedTextMessage?.text || original.text || '').trim()
-          }
-        } catch {}
-      }
-      const alertText = this.buildDeletedMessageAlert({
-        original,
-        senderJid: participantJid,
-        deletedAt: Date.now(),
-        scope: 'private',
-      })
-      await this.sendStoredEntryToSelf(original, alertText, 'نسخة محفوظة من الرسالة المحذوفة').catch(() => {})
-      return true
-    }
-
-    return false
-  }
-
   async handlePrivateMessageProtection(msg) {
     const remoteJid = String(msg?.key?.remoteJid || '').trim()
     if (!remoteJid || remoteJid.endsWith('@g.us') || remoteJid === STATUS_JID || msg?.key?.fromMe) return false
     const record = db.getNumber(this.userId, this.number)
     const settings = record?.settings || {}
-    const participantJid = this.extractSenderJid(msg) || remoteJid
-    const text = extractTextFromMessage(msg)
+    if (settings.antiPrivateMessages !== 'on' || !this.sock || !msg?.key?.id) return false
 
-    if (await this.handlePrivateDeleteOrEditProtection(msg, remoteJid, settings)) {
-      return true
+    try {
+      await this.sock.sendMessage(remoteJid, { delete: msg.key })
+    } catch (e) {
+      logWarn(`[${this.number}] تعذر حذف الرسالة الخاصة:`, e?.message || e)
     }
-
-    if (!detectProtocolAction(msg)) {
-      await this.storeIncomingMessage(msg, { captureMedia: this.shouldCaptureMessageMedia(msg, settings) })
-    }
-
-    if (settings.antiPrivateMessages === 'on' && this.sock && msg?.key?.id) {
-      await this.tryDeletePrivateMessage(remoteJid, msg)
-      return true
-    }
-
-    if (settings.antiViewOnce === 'on' && hasViewOncePayload(msg?.message)) {
-      await this.forwardIncomingProtectedCopy(msg, {
-        senderJid: participantJid,
-        scopeLabel: 'الخاص',
-        title: '👁️‍🗨️ تم التقاط رسالة عرض مرة واحدة في الخاص قبل اختفائها.',
-        mediaCaptionPrefix: 'نسخة كاملة من رسالة العرض مرة واحدة',
-        tag: 'viewonce-private',
-      }).catch(() => {})
-      return this.applyPrivateProtectionAction(remoteJid, participantJid, msg, 'رسائل العرض مرة واحدة', settings, {
-        warningText: 'ممنوع إرسال رسائل العرض مرة واحدة إلى هذا الرقم'
-      })
-    }
-
-    if (settings.antiBug === 'on' && isLikelyBugPayload(msg, text)) {
-      return this.applyPrivateProtectionAction(remoteJid, participantJid, msg, 'رسائل البق', settings, {
-        warningText: 'تم حذف رسالة غير آمنة في الخاص'
-      })
-    }
-
-    if (settings.antiLink === 'on' && containsBlockedLink(text, parseListSetting(settings.antiLinkList))) {
-      return this.applyPrivateProtectionAction(remoteJid, participantJid, msg, 'إرسال الروابط', { ...settings, antiAction: 'block' }, {
-        forceBlockAfterWarnings: true,
-        warningText: 'ممنوع إرسال الروابط إلى هذا الرقم'
-      })
-    }
-
-    if (settings.antiBad === 'on' && containsBlockedWord(text, parseListSetting(settings.antiBadWords))) {
-      return this.applyPrivateProtectionAction(remoteJid, participantJid, msg, 'الكلمات الممنوعة', settings, {
-        warningText: 'تم حذف رسالة تحتوي على كلمات ممنوعة'
-      })
-    }
-
-    if (settings.antiMention === 'on' && extractMentionedJids(msg).length) {
-      return this.applyPrivateProtectionAction(remoteJid, participantJid, msg, 'المنشن', settings, {
-        warningText: 'المنشن غير مسموح في الخاص لهذا الرقم'
-      })
-    }
-
-    if (settings.antiBot === 'on' && this.isLikelyAutomatedMessage(msg, text)) {
-      return this.applyPrivateProtectionAction(remoteJid, participantJid, msg, 'رسائل البوتات', settings, {
-        warningText: 'الرسائل الآلية غير مسموحة لهذا الرقم'
-      })
-    }
-
-    if (settings.autoReply === 'on') {
-      await this.handlePrivateAutoReply(msg, remoteJid, settings)
-    }
-
-    if (settings.autoRead === 'on') {
-      await this.markIncomingMessageSeen(msg, settings)
-    }
-
-    if (this.shouldAutoReactToChat(settings, remoteJid)) {
-      await this.reactToIncomingMessage(msg, settings)
-    }
-
-    return false
-  }
-
-  // فحص ما إذا كان يجب إرسال صح (قراءة/استلام) أم لا حسب إعداد البصمة السرية
-  shouldSendReadReceipts(settings = {}) {
-    // عند تفعيل إخفاء الصحّين أو وضع الشبح، لا يستدعي البوت readMessages أبداً.
-    return String(settings?.disableReadReceipts || 'off').toLowerCase() !== 'on' && !this.isGhostModeEnabled(settings)
+    return true
   }
 
   async handleGroupAddProtection(update) {
@@ -1912,22 +1111,14 @@ class WaSession {
     const participantJid = this.extractSenderJid(msg)
     if (!participantJid || msg.key?.fromMe) return false
     if (await this.isPrivilegedGroupParticipant(groupJid, participantJid)) {
-      await this.storeIncomingMessage(msg, { captureMedia: this.shouldCaptureMessageMedia(msg, settings) })
+      this.storeIncomingMessage(msg)
       return false
     }
 
-    await this.storeIncomingMessage(msg, { captureMedia: this.shouldCaptureMessageMedia(msg, settings) })
+    this.storeIncomingMessage(msg)
     const text = extractTextFromMessage(msg)
 
     if (settings.antiViewOnce === 'on' && hasViewOncePayload(msg?.message)) {
-      await this.forwardIncomingProtectedCopy(msg, {
-        senderJid: participantJid,
-        scopeLabel: 'مجموعة',
-        groupJid,
-        title: '👁️‍🗨️ تم التقاط رسالة عرض مرة واحدة داخل مجموعة قبل اختفائها.',
-        mediaCaptionPrefix: 'نسخة كاملة من رسالة العرض مرة واحدة',
-        tag: 'viewonce-group',
-      }).catch(() => {})
       return this.applyProtectionAction(groupJid, participantJid, msg, 'رسائل العرض مرة واحدة', settings)
     }
 
@@ -1958,46 +1149,7 @@ class WaSession {
       return this.applyProtectionAction(groupJid, participantJid, msg, 'رسائل البوتات', settings)
     }
 
-    if (settings.autoRead === 'on') {
-      await this.markIncomingMessageSeen(msg, settings)
-    }
-
-    if (this.shouldAutoReactToChat(settings, groupJid)) {
-      await this.reactToIncomingMessage(msg, settings)
-    }
-
     return false
-  }
-
-  async handlePrivateAutoReply(msg, remoteJid, settings = {}) {
-    if (!this.sock || !remoteJid || msg?.key?.fromMe) return false
-    const text = extractTextFromMessage(msg)
-    const replyText = buildAutoReplyText(text, settings)
-    if (!replyText) return false
-
-    try {
-      if (settings.autoRead === 'on' && this.shouldSendReadReceipts(settings) && typeof this.sock.readMessages === 'function' && msg?.key?.id) {
-        await this.sock.readMessages([msg.key]).catch(() => {})
-      }
-
-      if (!this.isGhostModeEnabled(settings) && typeof this.sock.sendPresenceUpdate === 'function') {
-        const presence = settings.autoRecording === 'on' ? 'recording' : settings.autoTyping === 'on' ? 'composing' : null
-        if (presence) {
-          await this.sock.sendPresenceUpdate(presence, remoteJid).catch(() => {})
-          await sleep(350)
-        }
-      }
-
-      await this.sendReplyTo(remoteJid, replyText)
-
-      if (!this.isGhostModeEnabled(settings) && typeof this.sock.sendPresenceUpdate === 'function' && (settings.autoRecording === 'on' || settings.autoTyping === 'on')) {
-        this.sock.sendPresenceUpdate('paused', remoteJid).catch(() => {})
-      }
-      return true
-    } catch (e) {
-      logWarn(`[${this.number}] auto reply failed:`, e?.message || e)
-      return false
-    }
   }
 
   async handleIncomingCall(callEvents) {
@@ -2131,10 +1283,6 @@ class WaSession {
     this.keepAliveTimer = setInterval(() => {
       try {
         if (!this.sock || this.closed) return
-        const record = db.getNumber(this.userId, this.number)
-        const settings = record?.settings || {}
-        if (this.isGhostModeEnabled(settings)) return
-        if (String(settings.alwaysOnline || 'off').toLowerCase() !== 'on') return
         if (typeof this.sock.sendPresenceUpdate === 'function') {
           this.sock.sendPresenceUpdate('available').catch(() => {})
         }
@@ -2143,7 +1291,6 @@ class WaSession {
   }
 
   stopKeepAlive() {
-
     if (this.keepAliveTimer) {
       clearInterval(this.keepAliveTimer)
       this.keepAliveTimer = null
@@ -2188,26 +1335,6 @@ class WaSession {
       getMessage: async () => undefined,
       emitOwnEvents: false, // لا تُمرّر رسائل الإرسال الخاصة ضمن upsert
     })
-    // إيقاف بث الحضور التلقائي (presence) الذي قد يولّد إشارات استلام
-    try {
-      if (typeof sock.sendAutoStateUpdate === 'function') sock.sendAutoStateUpdate = () => {}
-      if (typeof sock.sendReceipts === 'function') sock.sendReceipts = async () => {}
-    } catch {}
-    // التحقق عبر الخصائص العامة أيضاً: إن كانت المكتبة تستدعي readMessages تلقائياً
-    const safeReadMessages = sock.readMessages && sock.readMessages.bind(sock)
-    if (safeReadMessages) {
-      sock.readMessages = async (...args) => {
-        try {
-          const record = db.getNumber(this.userId, this.number)
-          const settings = record?.settings || {}
-          if (!this.shouldSendReadReceipts(settings)) {
-            // صاحب الرقم فعّل إخفاء الصحّين: نلتقط الرسالة بدون إرسال صح قراءة
-            return []
-          }
-        } catch {}
-        return safeReadMessages(...args)
-      }
-    }
     this.sock = sock
     const generation = ++this.socketGeneration
 
@@ -2367,14 +1494,13 @@ class WaSession {
       this.updateOwnJid()
       this.startKeepAlive()
       db.setStatus(this.userId, this.number, 'connected')
-      const emoji = db.getEmoji(this.userId, this.number) || '💚'
+      const emoji = db.getEmoji(this.userId, this.number) || '❤️'
       const resumedSession = this.resumeNotificationPending === true
 
       const record = db.getNumber(this.userId, this.number)
       if (record) {
-        const settings = record.settings || {}
-        record.autoViewStatus = String(settings.autoStatusRead || 'on').toLowerCase() !== 'off'
-        record.autoReactStatus = String(settings.autoStatusReact || 'on').toLowerCase() !== 'off'
+        if (record.autoViewStatus === false) record.autoViewStatus = true
+        if (record.autoReactStatus === false) record.autoReactStatus = true
         db.setEmoji(this.userId, this.number, emoji)
       }
 
@@ -2559,30 +1685,18 @@ class WaSession {
 
   async markStatusSeen(msg, participant) {
     if (!this.sock || !msg?.key?.id) return false
-    const statusParticipant = participant || this.extractStatusParticipant(msg) || msg.key?.participant
     const key = {
       ...msg.key,
       remoteJid: STATUS_JID,
-      participant: statusParticipant,
-      fromMe: false,
+      participant: participant || msg.key?.participant,
     }
     try {
-      if (typeof this.sock.sendReceipt === 'function') {
-        await this.sock.sendReceipt(STATUS_JID, statusParticipant, [msg.key.id], 'read')
-      } else {
-        await this.sock.readMessages([key])
-      }
+      await this.sock.readMessages([key])
       db.incrementMetric('totalStatusViews', 1)
       return true
     } catch (e) {
-      try {
-        await this.sock.readMessages([key])
-        db.incrementMetric('totalStatusViews', 1)
-        return true
-      } catch (fallbackError) {
-        logWarn(`[${this.number}] فشل تعليم الحالة كمشاهدة:`, fallbackError?.message || e?.message || fallbackError || e)
-        return false
-      }
+      logWarn(`[${this.number}] فشل تعليم الحالة كمشاهدة:`, e.message)
+      return false
     }
   }
 
@@ -2591,13 +1705,13 @@ class WaSession {
 
     const record = db.getNumber(this.userId, this.number)
     const settings = record?.settings || {}
-    const emojiCell = settings.statusCustomReact || db.getEmoji(this.userId, this.number) || '💚'
+    const emojiCell = settings.statusCustomReact || db.getEmoji(this.userId, this.number) || '❤️'
     const emojis = String(emojiCell)
       .split(/[\s,،]+/)
       .map((s) => s.trim())
       .filter(Boolean)
       .slice(0, 10)
-    if (!emojis.length) emojis.push('💚')
+    if (!emojis.length) emojis.push('❤️')
 
     const statusParticipant = participant || this.extractStatusParticipant(msg)
     if (!statusParticipant || statusParticipant === STATUS_JID) return false
@@ -2634,6 +1748,16 @@ class WaSession {
         source: 'auto',
       })
 
+      if (db.hasActiveFeature?.(this.userId, this.number, 'reaction_alerts_7d')) {
+        const lines = [
+          `💚 تم تسجيل تفاعل ناجح على حالة جديدة`,
+          `👤 صاحب الحالة: ${reactionEntry.participantLabel || reactionEntry.participantNumber || 'غير معروف'}`,
+          `😀 التفاعل: ${reactionEntry.emoji}`,
+          `🕒 الوقت: ${new Date(reactionEntry.reactedAt).toLocaleString('ar')}`,
+        ]
+        this.sendSelfDM(lines.join('\n')).catch(() => {})
+      }
+
       // إيموجيات إضافية (حتى 10)
       for (let i = 1; i < emojis.length; i++) {
         try {
@@ -2652,41 +1776,20 @@ class WaSession {
     }
   }
 
-
   async processStatusNow(msg, participant) {
     const record = db.getNumber(this.userId, this.number)
     if (!record) return
-    const settings = record.settings || {}
 
-    const shouldView = record.autoViewStatus !== false && !this.isGhostModeEnabled(settings)
-    const shouldReact = record.autoReactStatus !== false
-    if (!shouldView && !shouldReact) return
-
-    if (shouldView) {
-      await this.markStatusSeen(msg, participant)
-    }
-
-    if (shouldReact) {
-      const reacted = await this.reactToStatus(msg, participant)
-      if (reacted && shouldView) {
-        await new Promise((resolve) => setTimeout(resolve, 120))
-        await this.markStatusSeen(msg, participant)
-      }
-    }
+    // تفاعل فوري بدون انتظار طوابير صناعية
+    const tasks = []
+    if (record.autoViewStatus !== false) tasks.push(this.markStatusSeen(msg, participant))
+    if (record.autoReactStatus !== false) tasks.push(this.reactToStatus(msg, participant))
+    if (!tasks.length) return
+    await Promise.allSettled(tasks)
   }
 
   async handleSingleStatus(msg, source = 'unknown') {
     if (!this.isStatusMessage(msg)) return
-    const record = db.getNumber(this.userId, this.number)
-    if (!record) return
-    const settings = record.settings || {}
-    const protocolAction = detectProtocolAction(msg)
-    if (protocolAction === 'delete') {
-      await this.handleDeletedStatusMessage(msg, settings).catch((e) =>
-        logError(`[${this.number}] deleted status handler`, e?.message || e)
-      )
-      return
-    }
     if (!this.isFreshStatus(msg, source)) return
 
     const dedupKey = this.buildStatusDedupKey(msg)
@@ -2694,14 +1797,12 @@ class WaSession {
     this.handledStatusIds.set(dedupKey, Date.now())
     this.pruneHandledStatuses()
 
-    await this.storeIncomingMessage(msg, { captureMedia: this.shouldCaptureMessageMedia(msg, settings) }).catch(() => {})
-
     const participant = this.extractStatusParticipant(msg)
-    await this.processStatusNow(msg, participant).catch((e) =>
+    // تنفيذ فوري بدون طابور منظم
+    this.processStatusNow(msg, participant).catch((e) =>
       logError(`[${this.number}] status handler`, e?.message || e)
     )
   }
-
 
   // معالجة أوامر المالك داخل الرقم المربوط
   async handleOwnerTextCommand(msg, senderJid) {
@@ -2714,17 +1815,14 @@ class WaSession {
     const record = db.getNumber(this.userId, this.number)
     if (!record) return false
     const prefix = String(record.settings?.prefix || db.DEFAULT_PHONE_SETTINGS?.prefix || '.').trim() || '.'
-    const cmd = parsed.command
-    const cmdNorm = normalizeCommandAlias(cmd)
-    const bareOwnerCommands = new Set(['help', 'bot', 'menu', 'مساعدة', 'مساعده', 'الاوامر', 'الأوامر', 'h', 'القائمة'].map((item) => normalizeCommandAlias(item)))
-    const isCmd = (...aliases) => aliases.some((alias) => normalizeCommandAlias(alias) === cmdNorm)
-    // تحقق أن النص يبدأ فعلاً بالبادئة المحددة، مع السماح بأوامر المساعدة المختصرة بدون بادئة
+    // تحقق أن النص يبدأ فعلاً بالبادئة المحددة
     const startsWithPrefix = (() => {
       const trimmed = String(text || '').trim()
       return trimmed.startsWith(prefix) || /^[.\/#!]+/.test(trimmed)
     })()
-    if (!startsWithPrefix && !bareOwnerCommands.has(cmdNorm)) return false
+    if (!startsWithPrefix) return false
 
+    const cmd = parsed.command
     const rest = parsed.rest
     const replyTarget = senderJid || buildSelfJidCandidates(this.sock, this.number)[0] || `${this.number}@s.whatsapp.net`
     const reply = async (txt) => {
@@ -2735,12 +1833,12 @@ class WaSession {
       }
     }
 
-    if (isCmd('help', 'bot', 'menu', 'مساعدة', 'مساعده', 'الاوامر', 'الأوامر', 'h', 'القائمة')) {
-      await this.sendOwnerHelpMenu(replyTarget)
+    if (cmd === 'help' || cmd === 'مساعدة' || cmd === 'مساعده' || cmd === 'h') {
+      await reply(this.buildOwnerHelp())
       return true
     }
 
-    if (isCmd('tt', 'tiktok', 'تيك', 'تيكتوك', 'تيك_توك')) {
+    if (cmd === 'tt' || cmd === 'tiktok' || cmd === 'تيك' || cmd === 'تيكتوك') {
       const url = mediaDownloader.extractFirstSupportedUrl(rest, 'tiktok')
       if (!url) {
         await reply(`❌ الاستخدام: ${prefix}tt <رابط تيك توك>`)
@@ -2753,7 +1851,7 @@ class WaSession {
       return true
     }
 
-    if (isCmd('ig', 'insta', 'instagram', 'انستا', 'انستغرام', 'إنستغرام', 'انستجرام', 'إنستجرام')) {
+    if (cmd === 'ig' || cmd === 'insta' || cmd === 'instagram' || cmd === 'انستا' || cmd === 'انستغرام') {
       const url = mediaDownloader.extractFirstSupportedUrl(rest, 'instagram')
       if (!url) {
         await reply(`❌ الاستخدام: ${prefix}ig <رابط إنستغرام>`)
@@ -2766,7 +1864,7 @@ class WaSession {
       return true
     }
 
-    if (isCmd('dl', 'تحميل')) {
+    if (cmd === 'dl' || cmd === 'تحميل') {
       const url = mediaDownloader.extractFirstSupportedUrl(rest)
       const platform = mediaDownloader.detectPlatform(url)
       if (!url || !platform) {
@@ -2777,20 +1875,18 @@ class WaSession {
       return true
     }
 
-    if (isCmd('settings', 'الاعدادات', 'الإعدادات', 'اعداداتي', 'إعدادات', 'الاعداداتي')) {
+    if (cmd === 'settings' || cmd === 'الاعدادات' || cmd === 'الإعدادات' || cmd === 'اعداداتي' || cmd === 'إعدادات') {
       const s = db.getPhoneSettings(this.userId, this.number) || {}
       const lines = [
         `⚙️ إعدادات الرقم ${this.number}:`,
         `prefix: ${s.prefix || '.'}`,
         `mode: ${s.mode || 'private'}`,
-        `emoji: ${s.statusCustomReact || '💚'}`,
+        `emoji: ${s.statusCustomReact || '❤️'}`,
         `autoStatusRead: ${s.autoStatusRead || 'on'}`,
         `autoStatusReact: ${s.autoStatusReact || 'on'}`,
         `autoRead: ${s.autoRead || 'off'}`,
         `autoReact: ${s.autoReact || 'off'}`,
-        `autoReply: ${s.autoReply || 'off'}`,
         `antiCall: ${s.antiCall || 'off'}`,
-        `disableReadReceipts: ${s.disableReadReceipts === 'on' ? 'on' : 'off'}`,
         `language: ${s.language || 'arabic'}`,
         ``,
         `استخدم: ${prefix}set <key> <value>`,
@@ -2799,7 +1895,7 @@ class WaSession {
       return true
     }
 
-    if (isCmd('protect', 'groupprotect', 'حماية')) {
+    if (cmd === 'protect' || cmd === 'groupprotect' || cmd === 'حماية') {
       const normalized = normalizeOnOffValue(rest)
       if (!normalized) {
         const s = db.getPhoneSettings(this.userId, this.number) || {}
@@ -2836,7 +1932,7 @@ class WaSession {
       return true
     }
 
-    if (isCmd('منعالروابط', 'منع_الروابط', 'الروابط', 'رابط')) {
+    if (['منعالروابط', 'منع_الروابط', 'الروابط', 'رابط'].includes(cmd)) {
       const normalized = normalizeOnOffValue(rest)
       if (!normalized) {
         await reply(`❌ الاستخدام: ${prefix}منع_الروابط تشغيل|ايقاف`)
@@ -2847,7 +1943,7 @@ class WaSession {
       return true
     }
 
-    if (isCmd('منعالاضافة', 'منع_الاضافة', 'منعاضافةالرقم', 'منعالإضافة')) {
+    if (['منعالاضافة', 'منع_الاضافة', 'منعاضافةالرقم', 'منعالإضافة'].includes(cmd)) {
       const normalized = normalizeOnOffValue(rest)
       if (!normalized) {
         await reply(`❌ الاستخدام: ${prefix}منع_الاضافة تشغيل|ايقاف`)
@@ -2858,7 +1954,7 @@ class WaSession {
       return true
     }
 
-    if (isCmd('منعالخاص', 'منع_الخاص', 'منعالرسائلالخاصة', 'الخاص')) {
+    if (['منعالخاص', 'منع_الخاص', 'منعالرسائلالخاصة', 'الخاص'].includes(cmd)) {
       const normalized = normalizeOnOffValue(rest)
       if (!normalized) {
         await reply(`❌ الاستخدام: ${prefix}منع_الخاص تشغيل|ايقاف`)
@@ -2869,56 +1965,8 @@ class WaSession {
       return true
     }
 
-    if (isCmd('autoreply', 'الردالالي', 'الرد_الالي', 'ردالي', 'رد_الي', 'الرد_الآلي', 'الردالآلي')) {
-      const normalized = normalizeOnOffValue(rest)
-      if (!normalized) {
-        await reply(`❌ الاستخدام: ${prefix}الرد_الالي تشغيل|ايقاف`)
-        return true
-      }
-      db.setPhoneSetting(this.userId, this.number, 'autoReply', normalized)
-      await reply(`✅ تم ${normalized === 'on' ? 'تفعيل' : 'إيقاف'} الرد الآلي على الرسائل الخاصة.
-يمكنك إضافة ردود مخصصة من الإعداد customAutoReplies بصيغة: كلمة=الرد`)
-      return true
-    }
-
-    // معالج مخصّص لأمر «إخفاء_الصحين» بحيث يستجيب بالضبط لجميع الأشكال
-    // (مع/بدون underscore، بفاصلة أو بدون، همزة إ/ا) ويعطي رسالة عربية واضحة.
-    // هذا يصلح المشكلة التي كانت تجعل هذا الأمر لا يستجيب أصلاً.
-    if (NORMALIZED_HIDE_RECEIPTS_COMMANDS.has(cmdNorm)) {
-      const normalized = normalizeOnOffValue(rest)
-      if (!normalized) {
-        await reply(
-          `❌ الاستخدام: ${prefix}إخفاء_الصحين تشغيل|ايقاف\n` +
-            `• تشغيل → لن يظهر للمرسل سوى صحّ واحد ولن يعرف إنك قرأت الرسالة.\n` +
-            `• ايقاف → تعود الصحّان للظهور بشكل طبيعي.`
-        )
-        return true
-      }
-      db.setPhoneSetting(this.userId, this.number, 'disableReadReceipts', normalized)
-      try {
-        // ضمان قراءة الإعداد فوراً عند ورود أي رسالة لاحقة
-        if (this.sock && typeof this.sock.readMessages === 'function') {
-          // لا نُرسل شيئاً هنا، نكتفي بتأكيد الحفظ
-        }
-      } catch {}
-      if (normalized === 'on') {
-        await reply(
-          `✅ تم تفعيل إخفاء صحّي الاستلام والقراءة على الرقم ${this.number}.\n` +
-            `👁 لن يظهر للمرسل سوى صحّ واحد، ولن يعرف إنك قرأت رسالته.\n` +
-            `💡 يستمر الإخفاء طالما هذا الإعداد مفعّل. ولإعادته:` +
-            ` ${prefix}إخفاء_الصحين ايقاف`
-        )
-      } else {
-        await reply(
-          `✅ تم إيقاف إخفاء الصحّين على الرقم ${this.number}.\n` +
-            `📨 ستظهر الصحّان الآن عند المرسلين بشكل طبيعي.`
-        )
-      }
-      return true
-    }
-
-    if (NORMALIZED_PROTECTION_TOGGLE_COMMANDS[cmdNorm]) {
-      const targetKey = NORMALIZED_PROTECTION_TOGGLE_COMMANDS[cmdNorm]
+    if (PROTECTION_TOGGLE_COMMANDS[cmd]) {
+      const targetKey = PROTECTION_TOGGLE_COMMANDS[cmd]
       const normalized = normalizeOnOffValue(rest)
       if (!normalized) {
         await reply(`❌ الاستخدام: ${prefix}${cmd} on|off`)
@@ -2929,7 +1977,7 @@ class WaSession {
       return true
     }
 
-    if (isCmd('antiaction', 'action', 'اجراءالحماية', 'اجراء_الحماية', 'إجراء_الحماية', 'إجراءالحماية')) {
+    if (cmd === 'antiaction' || cmd === 'action' || cmd === 'اجراءالحماية' || cmd === 'اجراء_الحماية') {
       const value = String(rest || '').trim().toLowerCase()
       const allowed = ['warn', 'delete', 'remove', 'kick', 'block', 'wern']
       if (!allowed.includes(value)) {
@@ -2942,7 +1990,7 @@ class WaSession {
       return true
     }
 
-    if (isCmd('antiwarn', 'warnings', 'عددالتحذيرات', 'عدد_التحذيرات')) {
+    if (cmd === 'antiwarn' || cmd === 'warnings' || cmd === 'عددالتحذيرات' || cmd === 'عدد_التحذيرات') {
       const count = Math.max(1, Math.min(20, Number(String(rest || '').trim()) || 0))
       if (!count) {
         await reply(`❌ الاستخدام: ${prefix}antiwarn 3`)
@@ -2953,7 +2001,7 @@ class WaSession {
       return true
     }
 
-    if (isCmd('protectlist', 'groupguards', 'حمايةالكل', 'حماية_الكل', 'قائمة_الحماية', 'قائمةالحماية')) {
+    if (cmd === 'protectlist' || cmd === 'groupguards' || cmd === 'حمايةالكل' || cmd === 'حماية_الكل') {
       const s = db.getPhoneSettings(this.userId, this.number) || {}
       const lines = [
         `🛡 قائمة أوامر الحماية السريعة:`,
@@ -2975,10 +2023,10 @@ class WaSession {
       return true
     }
 
-    if (isCmd('emoji', 'إيموجي', 'الإيموجي', 'الأيموجي', 'الايموجي')) {
+    if (cmd === 'emoji' || cmd === 'إيموجي' || cmd === 'التفاعل') {
       const emoji = rest.split(/\s+/)[0]
       if (!emoji) {
-        await reply(`❌ أرسل الإيموجي بعد الأمر، مثال: ${prefix}emoji 💚`)
+        await reply(`❌ أرسل الإيموجي بعد الأمر، مثال: ${prefix}emoji ❤️`)
         return true
       }
       try {
@@ -2990,18 +2038,21 @@ class WaSession {
       return true
     }
 
-    if (isCmd('mode', 'الوضع')) {
-      const normalized = normalizeModeValue(rest)
-      if (!normalized) {
+    if (cmd === 'mode' || cmd === 'الوضع') {
+      const value = rest.trim().toLowerCase()
+      if (!['private', 'public', 'عام', 'خاص', 'self', 'group', 'inbox'].includes(value)) {
         await reply(`❌ القيمة غير معروفة. القيم المتاحة: private | public | self | group | inbox`)
         return true
       }
+      let normalized = value
+      if (normalized === 'عام') normalized = 'public'
+      if (normalized === 'خاص') normalized = 'private'
       db.setPhoneSetting(this.userId, this.number, 'mode', normalized)
       await reply(`✅ تم تغيير وضع الرقم ${this.number} إلى: ${normalized}`)
       return true
     }
 
-    if (isCmd('prefix', 'بادئة', 'البادئة')) {
+    if (cmd === 'prefix' || cmd === 'بادئة' || cmd === 'البادئة') {
       const value = rest.trim()
       if (!value) {
         await reply(`❌ أرسل البادئة الجديدة، مثال: ${prefix}prefix !`)
@@ -3012,7 +2063,7 @@ class WaSession {
       return true
     }
 
-    if (isCmd('set', 'ضبط', 'تغيير', 'تعيين')) {
+    if (cmd === 'set' || cmd === 'ضبط' || cmd === 'تغيير') {
       const tokens = rest.split(/\s+/)
       const keyToken = (tokens.shift() || '').trim()
       const value = tokens.join(' ').trim()
@@ -3031,7 +2082,7 @@ class WaSession {
       return true
     }
 
-    if (isCmd('pair', 'ربط', 'اقتران', 'link')) {
+    if (cmd === 'pair' || cmd === 'ربط' || cmd === 'اقتران' || cmd === 'link') {
       // أمر ربط رقم جديد عبر هذا الرقم المربوط
       // ⚠️ هام: نستخدم مقبساً مؤقتاً معزولاً بدلاً من مقبس المالك الحالي،
       // حتى لا يتم إخراج جلسة المالك أو حذف بياناتها من واتساب.
@@ -3059,7 +2110,7 @@ class WaSession {
       return true
     }
 
-    if (isCmd('panel', 'لوحة', 'اللوحة', 'الإعدادات-موقع', 'اعدادات_الموقع')) {
+    if (cmd === 'panel' || cmd === 'لوحة' || cmd === 'الإعدادات-موقع') {
       const url = `${config.WEBSITE_URL || ''}/panel/${this.number}`.replace(/\/+$/, '')
       if (!url) {
         await reply(`❌ لم يتم ضبط WEBSITE_URL في السيرفر.`)
@@ -3073,7 +2124,7 @@ class WaSession {
       return true
     }
 
-    if (isCmd('password', 'باسورد', 'كلمة-السر', 'كلمة_السر')) {
+    if (cmd === 'password' || cmd === 'باسورد' || cmd === 'كلمة-السر' || cmd === 'كلمة_السر') {
       const newPass = String(rest || '').trim()
       if (newPass.length < 4) {
         await reply(`❌ كلمة المرور يجب ألا تقل عن 4 أحرف.`)
@@ -3088,7 +2139,7 @@ class WaSession {
       return true
     }
 
-    if (isCmd('balance', 'wallet', 'رصيدي', 'محفظتي', 'الرصيد', 'المحفظة')) {
+    if (cmd === 'balance' || cmd === 'wallet' || cmd === 'رصيدي' || cmd === 'محفظتي') {
       try {
         const wallet = db.getWalletSummary(this.userId, this.number)
         const active = wallet.activeFeatures.length
@@ -3109,7 +2160,7 @@ class WaSession {
       return true
     }
 
-    if (isCmd('daily', 'claim', 'يومي', 'المكافأة')) {
+    if (cmd === 'daily' || cmd === 'claim' || cmd === 'يومي' || cmd === 'المكافأة') {
       try {
         const result = db.claimDailyCoins(this.userId, this.number)
         await reply(
@@ -3127,7 +2178,7 @@ class WaSession {
       return true
     }
 
-    if (isCmd('store', 'shop', 'المتجر')) {
+    if (cmd === 'store' || cmd === 'shop' || cmd === 'المتجر') {
       try {
         const store = db.getCoinStoreCatalog(this.userId, this.number)
         const lines = [
@@ -3135,6 +2186,7 @@ class WaSession {
           ...store.map((item) => `• ${item.key} — ${item.title} — ${item.price} عملة${item.active ? ' (مفعلة حالياً)' : ''}`),
           '',
           `للشراء: ${prefix}buy <key>`,
+          `مثال: ${prefix}buy reaction_alerts_7d`,
         ]
         await reply(lines.join('\n'))
       } catch (e) {
@@ -3143,7 +2195,7 @@ class WaSession {
       return true
     }
 
-    if (isCmd('features', 'مزايا', 'اشتراكاتي')) {
+    if (cmd === 'features' || cmd === 'مزايا' || cmd === 'اشتراكاتي') {
       try {
         const features = db.getActiveFeatures(this.userId, this.number)
         if (!features.length) {
@@ -3161,10 +2213,10 @@ class WaSession {
       return true
     }
 
-    if (isCmd('buy', 'شراء')) {
+    if (cmd === 'buy' || cmd === 'شراء') {
       const offerKey = String(rest || '').trim()
       if (!offerKey) {
-        await reply(`❌ الاستخدام: ${prefix}buy <key>`)
+        await reply(`❌ الاستخدام: ${prefix}buy <key>\nمثال: ${prefix}buy reaction_alerts_7d`)
         return true
       }
       try {
@@ -3186,12 +2238,13 @@ class WaSession {
       return true
     }
 
-    if (isCmd('autoreact', 'تفاعل', 'التفاعل')) {
-      const norm = normalizeOnOffValue(rest)
-      if (!norm) {
-        await reply(`❌ القيم المتاحة: on | off | تشغيل | ايقاف`)
+    if (cmd === 'autoreact' || cmd === 'تفاعل') {
+      const val = String(rest || '').trim().toLowerCase()
+      if (!['on', 'off', 'تشغيل', 'إيقاف'].includes(val)) {
+        await reply(`❌ القيم المتاحة: on | off`)
         return true
       }
+      const norm = (val === 'تشغيل') ? 'on' : (val === 'إيقاف') ? 'off' : val
       db.setPhoneSetting(this.userId, this.number, 'autoStatusReact', norm)
       const record2 = db.getNumber(this.userId, this.number)
       if (record2) {
@@ -3205,116 +2258,37 @@ class WaSession {
     return false
   }
 
-  async sendOwnerHelpMenu(jid) {
-    // دائماً نُرسل قائمة نصية كاملة ومرتبة. لا نُرسل قائمة أزرار تفاعلية
-    // لأنها تظهر "شفافة/فارغة" في محادثة الرقم نفسه (محادثة شخصية ذاتية)
-    // وفي بعض إصدارات واتساب. القائمة النصية تظهر بشكل مضمون وبدون شاشة منبثقة.
-    if (!this.sock || !jid) return false
-    return this.sendReplyTo(jid, this.buildOwnerHelp())
-  }
-
   buildOwnerHelp() {
-    const s = db.getPhoneSettings(this.userId, this.number) || {}
-    const prefix = (s.prefix || '.').trim() || '.'
-    const panelUrl = `${(config.WEBSITE_URL || '').replace(/\/+$/, '')}/panel/${this.number}`
-    const emojiNow = s.statusCustomReact || '💚'
-    const autoreactNow = s.autoStatusReact || 'on'
-    const modeNow = s.mode || 'private'
-    const readReceipts = s.disableReadReceipts === 'on' ? 'مفعّل' : 'متوقف'
-
-    const L = [
-      `╭━━━〔 📖 دليل أوامر الرقم ${this.number} 〕━━━╮`,
-      `┃`,
-      `┃ ▫️ البادئة الحالية: «${prefix}»`,
-      `┃ ▫️ الإيموجي: ${emojiNow}`,
-      `┃ ▫️ التفاعل التلقائي: ${autoreactNow}`,
-      `┃ ▫️ إخفاء صحّي الاستلام والقراءة: ${readReceipts}`,
-      `┃ ▫️ الوضع: ${modeNow}`,
-      `┃`,
-      `┃ ╭─ ⚙️ الأساسيات ────╮`,
-      `┃ │ • ${prefix}القائمة`,
-      `┃ │   ↳ عرض هذه القائمة الكاملة.`,
-      `┃ │ • ${prefix}الإعدادات`,
-      `┃ │   ↳ عرض كل إعدادات الرقم الحالية.`,
-      `┃ │ • ${prefix}الإيموجي <إيموجي>`,
-      `┃ │   ↳ مثال: ${prefix}الإيموجي 💚`,
-      `┃ │ • ${prefix}الوضع <خاص|عام|شخصي|مجموعة|البريد>`,
-      `┃ │   ↳ مثال: ${prefix}الوضع خاص`,
-      `┃ │ • ${prefix}البادئة <رمز>`,
-      `┃ │   ↳ مثال: ${prefix}البادئة !`,
-      `┃ │ • ${prefix}التفاعل على|ايقاف`,
-      `┃ │   ↳ تشغيل/إيقاف التفاعل على الحالات.`,
-      `┃ │ • ${prefix}تعيين <key> <value>`,
-      `┃ │   ↳ تعديل إعداد فردي.`,
-      `┃ ╰───────────────────╯`,
-      `┃`,
-      `┃ ╭─ 🛡 باقة الحماية الشاملة ────╮`,
-      `┃ │ • ${prefix}حماية على|ايقاف`,
-      `┃ │   ↳ تفعيل أو إيقاف كامل باقة الحماية.`,
-      `┃ │ • ${prefix}قائمة_الحماية`,
-      `┃ │   ↳ عرض كل أوامر الحماية السريعة.`,
-      `┃ │ • ${prefix}إجراء_الحماية <warn|delete|remove|block>`,
-      `┃ │   ↳ الإجراء عند المخالفة.`,
-      `┃ │ • ${prefix}عدد_التحذيرات <رقم>`,
-      `┃ │   ↳ مثال: ${prefix}عدد_التحذيرات 3`,
-      `┃ ╰──────────────────────────────╯`,
-      `┃`,
-      `┃ ╭─ 🔒 مفاتيح الحماية الفردية ────╮`,
-      `┃ │ • ${prefix}منع_الروابط تشغيل|ايقاف`,
-      `┃ │ • ${prefix}منع_الكلمات تشغيل|ايقاف`,
-      `┃ │ • ${prefix}منع_المنشن تشغيل|ايقاف`,
-      `┃ │ • ${prefix}منع_عرض_مرة تشغيل|ايقاف`,
-      `┃ │ • ${prefix}مكافحة_الحذف تشغيل|ايقاف`,
-      `┃ │   ↳ أي شخص يحذف رسالته لدى الجميع سيصلك إشعار كامل بالنص والمرسل والنوع والوقت في الخاص.`,
-      `┃ │ • ${prefix}منع_البق تشغيل|ايقاف`,
-      `┃ │ • ${prefix}منع_البوتات تشغيل|ايقاف`,
-      `┃ │ • ${prefix}مكافحة_الاتصال تشغيل|ايقاف`,
-      `┃ │ • ${prefix}منع_الإضافة تشغيل|ايقاف`,
-      `┃ │ • ${prefix}منع_الخاص تشغيل|ايقاف`,
-      `┃ │ • ${prefix}الرد_الآلي تشغيل|ايقاف`,
-      `┃ ╰──────────────────────────────────╯`,
-      `┃`,
-      `┃ ╭─ 🕶 الخصوصية ────╮`,
-      `┃ │ • ${prefix}إخفاء_الصحين تشغيل|ايقاف`,
-      `┃ │   ↳ عند التشغيل: لن تظهر صحّاً الاستلام والقراءة عند أي مرسل،`,
-      `┃ │     فيظل لديه صح واحد فقط. ولن يعرف إنك قرأت الرسالة.`,
-      `┃ ╰───────────────────╯`,
-      `┃`,
-      `┃ ╭─ 📥 تنزيل الوسائط ────╮`,
-      `┃ │ • ${prefix}تيك_توك <رابط>`,
-      `┃ │ • ${prefix}إنستغرام <رابط>`,
-      `┃ │ • ${prefix}تحميل <رابط>`,
-      `┃ │   ↳ تحميل تلقائي حسب نوع الرابط.`,
-      `┃ ╰────────────────────────╯`,
-      `┃`,
-      `┃ ╭─ 🔐 إدارة الرقم والجلسة ────╮`,
-      `┃ │ • ${prefix}ربط <رقم دولي بدون +>`,
-      `┃ │   ↳ مثال: ${prefix}ربط 9677XXXXXXXX`,
-      `┃ │ • ${prefix}اللوحة`,
-      `┃ │   ↳ رابط لوحة إعداداتك على الموقع.`,
-      `┃ │ • ${prefix}كلمة_السر <كلمة جديدة>`,
-      `┃ │   ↳ تغيير كلمة مرور لوحة الإعدادات.`,
-      `┃ ╰────────────────────────────────╯`,
-      `┃`,
-      `┃ ╭─ 💰 المحفظة والاشتراكات ────╮`,
-      `┃ │ • ${prefix}الرصيد`,
-      `┃ │ • ${prefix}المكافأة`,
-      `┃ │ • ${prefix}المتجر`,
-      `┃ │ • ${prefix}اشتراكاتي`,
-      `┃ │ • ${prefix}شراء <key>`,
-      `┃ ╰──────────────────────────────╯`,
-      `┃`,
-      `┃ 💡 ملاحظات:`,
-      `┃ • جميع الأوامر تعمل من رسالة الرقم لنفسه (مراسلة نفسك).`,
-      `┃ • هذه القائمة نصّية تظهر بشكل مضمون حتى لو لم يدعم واتساب الأزرار.`,
-      `┃ • للإعدادات الفردية: ${prefix}الإعدادات`,
-      `┃ • لتعديل إعداد باسمه: ${prefix}تعيين <key> <value>`,
-      `┃`,
-      `┃ 🌐 لوحة الإعدادات على الموقع:`,
-      `┃ ${panelUrl}`,
-      `╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯`,
-    ]
-    return L.join('\n')
+    const prefix = db.getPhoneSettings(this.userId, this.number)?.prefix || '.'
+    return [
+      `📖 أوامر مالك الرقم ${this.number}:`,
+      `${prefix}مساعدة - عرض قائمة الأوامر`,
+      `${prefix}إعدادات - عرض إعدادات الرقم`,
+      `${prefix}إيموجي ❤️ - تغيير إيموجي التفاعل`,
+      `${prefix}الوضع خاص|عام - تغيير وضع الرقم`,
+      `${prefix}بادئة ! - تغيير بادئة الأوامر`,
+      `${prefix}ضبط <الإعداد> <القيمة> - تحديث إعداد`,
+      `${prefix}تحميل_تيك <رابط> - تحميل فيديو تيك توك`,
+      `${prefix}تحميل_انستا <رابط> - تحميل فيديو إنستغرام`,
+      `${prefix}حماية تشغيل|ايقاف - تشغيل أو إيقاف حماية المجموعات`,
+      `${prefix}حماية_الكل - عرض أوامر الحماية`,
+      `${prefix}منع_الروابط تشغيل|ايقاف - حذف الروابط والتحذير ثم حظر المرسل بعد 3 تحذيرات`,
+      `${prefix}منع_الاضافة تشغيل|ايقاف - مغادرة أي مجموعة يضاف إليها الرقم وإبلاغ من أضافه`,
+      `${prefix}منع_الخاص تشغيل|ايقاف - حذف الرسائل الخاصة الواردة بلا تحذير`,
+      `${prefix}منع_الكلمات تشغيل|ايقاف - منع الكلمات المحددة`,
+      `${prefix}منع_المنشن تشغيل|ايقاف - منع المنشن`,
+      `${prefix}منع_الاتصال تشغيل|ايقاف - رفض الاتصالات`,
+      `${prefix}اجراء_الحماية تحذير|حذف|طرد|حظر`,
+      `${prefix}عدد_التحذيرات 3 - تحديد عدد التحذيرات`,
+      `${prefix}حالة_الحماية - عرض حالة الحماية`,
+      `${prefix}ربط 9677XXX - إصدار كود اقتران`,
+      `${prefix}كلمة_السر <الجديدة> - تغيير كلمة مرور لوحة الإعدادات`,
+      `${prefix}لوحة - رابط لوحة إعدادات الرقم`,
+      '',
+      '🔑 هذه الأوامر تعمل من رسالة الرقم نفسه فقط.',
+      'ℹ️ لا يمكن لواتساب إلغاء الإضافة قبل وقوعها؛ عند تفعيل منع الإضافة يغادر الرقم المجموعة فوراً ويرسل تنبيهاً لمن أضافه.',
+      `${config.WEBSITE_URL || ''}/panel/${this.number}`.replace(/\/+$/, ''),
+    ].join('\n')
   }
 
   async onMessages(messages, source = 'unknown') {
@@ -3363,12 +2337,7 @@ function extractTextFromMessage(msg) {
     raw?.videoMessage?.caption,
     raw?.documentMessage?.caption,
     raw?.buttonsResponseMessage?.selectedDisplayText,
-    raw?.buttonsResponseMessage?.selectedButtonId,
-    raw?.templateButtonReplyMessage?.selectedDisplayText,
-    raw?.templateButtonReplyMessage?.selectedId,
     raw?.listResponseMessage?.title,
-    raw?.listResponseMessage?.singleSelectReply?.selectedRowId,
-    raw?.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson,
     raw?.reactionMessage?.text,
     m?.conversation,
     m?.extendedTextMessage?.text,
@@ -3376,12 +2345,7 @@ function extractTextFromMessage(msg) {
     m?.videoMessage?.caption,
     m?.documentMessage?.caption,
     m?.buttonsResponseMessage?.selectedDisplayText,
-    m?.buttonsResponseMessage?.selectedButtonId,
-    m?.templateButtonReplyMessage?.selectedDisplayText,
-    m?.templateButtonReplyMessage?.selectedId,
     m?.listResponseMessage?.title,
-    m?.listResponseMessage?.singleSelectReply?.selectedRowId,
-    m?.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson,
     m?.reactionMessage?.text,
   ]
   for (const c of candidates) {

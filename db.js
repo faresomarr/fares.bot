@@ -5,7 +5,7 @@ const { MongoClient } = require('mongodb')
 const { BufferJSON } = require('@whiskeysockets/baileys')
 const config = require('./config')
 
-const DEFAULT_EMOJI = '💚'
+const DEFAULT_EMOJI = '❤️'
 const PANEL_SESSION_TTL_MS = 1000 * 60 * 60 * 12 // 12h
 const PANEL_SALT = 'fares-bot-panel-salt-v1'
 const file = config.DB_FILE
@@ -16,6 +16,13 @@ const DEFAULT_REACTION_LOG_LIMIT = 40
 const EXTENDED_REACTION_LOG_LIMIT = 250
 const STATUS_REACTION_FRESH_MS = 1000 * 60 * 15
 const COIN_STORE = [
+  {
+    key: 'reaction_alerts_7d',
+    title: 'تنبيهات التفاعل 7 أيام',
+    price: 100,
+    durationMs: 1000 * 60 * 60 * 24 * 7,
+    description: 'يرسل تنبيهاً خاصاً إلى الرقم المربوط عند كل تفاعل ناجح على الحالة لمدة 7 أيام.',
+  },
   {
     key: 'extended_log_30d',
     title: 'سجل تفاعلات موسّع 30 يوم',
@@ -80,7 +87,7 @@ const DEFAULT_PHONE_SETTINGS = {
   alwaysOnline: 'off',
   autoStatusRead: 'on',
   autoStatusReact: 'on',
-  statusReactionNotice: 'off',
+  statusReactionNotice: 'on',
   keepDeletedStatus: 'off',
   ghostMode: 'off',
   autoPrivateReact: 'off',
@@ -98,7 +105,7 @@ const DEFAULT_PHONE_SETTINGS = {
   menu: '',
   alive: '',
   owner: '',
-  statusCustomReact: '💚',
+  statusCustomReact: '❤️',
   antiBug: 'off',
   antiBot: 'off',
   antiBotAction: 'delete',
@@ -107,7 +114,6 @@ const DEFAULT_PHONE_SETTINGS = {
   gaCloseTime: '15:00',
   gaOpenTime: '05:00',
   customAutoReplies: '',
-  autoReply: 'off',
   autoSave: 'off',
   language: 'arabic',
   antiViewOnce: 'off',
@@ -121,9 +127,6 @@ const DEFAULT_PHONE_SETTINGS = {
   aiReplyScope: 'inbox',
   aliveMsg: '❖ *Golden Queen Bot is alive*',
   voiceFooter: 'https://github.com/monetheistmd/WEB_DATABASE/raw/main/AUD-20251229-WA0034.mp3',
-  // إعداد إخفاء صحّي الاستلام والقراءة — حتى لا يضيع عند قراءة الرقم من DB
-  // ويظهر في القائمة النصية ولوحة الإعدادات بقيمة افتراضية 'off'.
-  disableReadReceipts: 'off',
 }
 
 let data = {
@@ -259,7 +262,7 @@ function normalizeStatusReactionEntry(raw = {}) {
   return {
     id: String(raw.id || createId('srx')),
     statusId: String(raw.statusId || raw.messageId || '').trim(),
-    emoji: String(raw.emoji || DEFAULT_EMOJI).trim() || DEFAULT_EMOJI,
+    emoji: String(raw.emoji || '❤️').trim() || '❤️',
     participantJid,
     participantNumber,
     participantLabel: String(raw.participantLabel || participantNumber || participantJid || 'غير معروف').trim(),
@@ -944,14 +947,9 @@ function setPhoneSettings(userId, number, patch) {
     }
   }
   n.settings = next
-  if (Object.prototype.hasOwnProperty.call(next, 'statusCustomReact')) {
-    n.emoji = (String(next.statusCustomReact || '').trim().split(/[,،\s]+/)[0] || DEFAULT_EMOJI)
-  } else if (!n.emoji || !n.emoji.trim()) {
-    n.emoji = DEFAULT_EMOJI
+  if (next.statusCustomReact && (!n.emoji || !n.emoji.trim())) {
+    n.emoji = next.statusCustomReact.trim().split(',')[0] || DEFAULT_EMOJI
   }
-
-  n.autoViewStatus = String(next.autoStatusRead || 'on').toLowerCase() !== 'off'
-  n.autoReactStatus = String(next.autoStatusReact || 'on').toLowerCase() !== 'off'
   save()
   upsertSessionRecord(userId, getUser(userId)?.chatId || null, n).catch(() => {})
   return { ...next }
