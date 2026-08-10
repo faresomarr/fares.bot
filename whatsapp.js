@@ -40,6 +40,15 @@ function logError(...args) {
   if (canLog('error')) console.error(...args)
 }
 
+// عداد أعطال إعادة الاتصال لكل جلسة + مهلة فحص الصحة
+function computeReconnectBackoff(baseDelayMs, attempt) {
+  const cap = config.SESSION_MAX_RECONNECT_BACKOFF_MS
+  const exp = baseDelayMs * Math.pow(1.7, Math.max(0, attempt - 1))
+  // jitter بسيط (±15%) لتفادي تصادُمحاولات إعادة الاتصال بين الأرقام المتعددة
+  const jitter = exp * (0.85 + Math.random() * 0.3)
+  return Math.min(cap, Math.max(500, Math.round(jitter)))
+}
+
 function setNotifier(fn) {
   notifyFn = fn
 }
@@ -860,6 +869,12 @@ class WaSession {
     // كاش مؤقت لمحتوى الرسائل الواردة (لإعادة إرسال المحذوف منها)
     this.deletedMessagesArchive = new Map()
     this.deletedStatusArchive = new Map()
+    // حقول جديدة لجعل الجلسة ذاتية الإصلاح في حال توقف التفاعل
+    this.healthCheckTimer = null
+    this.lastSocketPong = Date.now()
+    this.consecutiveReconnectFailures = 0
+    this.pendingReactions = []
+    this.lastReactionFlushAt = 0
   }
 
   // تخزين نسخة من الرسالة الواردة بحيث يمكن استرجاعها حتى بعد حذفها لدى الجميع
@@ -1976,6 +1991,119 @@ class WaSession {
     }
   }
 
+  startHealthCheck() {
+    this.stopHealthCheck()
+    this.lastSocketPong = Date.now()
+    this.healthCheckTimer = setInterval(() => {
+      try {
+        if (this.closed) return
+        if (!this.sock) return
+        const wsState = this.sock?.ws?.readyState
+        // 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED
+        if (wsState === 3) {
+          logWarn(`[${this.number}] watchdog: WebSocket مغلق بدون حدث connection.update — إعادة تشغيل الجلسة قسرياً`)
+          this.forceRestart('ws-closed-by-watchdog').catch((e) =>
+            logError(`[${this.number}] watchdog restart`, e?.message || e)
+          )
+          return
+        }
+        const idle = Date.now() - (this.lastSocketPong || 0)
+        if (wsState === 1 && idle > config.SESSION_HEALTH_TIMEOUT_MS) {
+          logWarn(`[${this.number}] watchdog: لا استجابة منذ ${Math.round(idle / 1000)}s — إعادة تشغيل الجلسة`)
+          this.forceRestart('idle-timeout').catch((e) =>
+            logError(`[${this.number}] watchdog restart`, e?.message || e)
+          )
+          return
+        }
+        if (wsState === 1) this.lastSocketPong = Date.now()
+      } catch (e) {
+        logWarn(`[${this.number}] health check tick:`, e?.message || e)
+      }
+      try {
+        this.flushPendingReactions()
+      } catch (e) {
+        logWarn(`[${this.number}] flushPendingReactions:`, e?.message || e)
+      }
+    }, config.SESSION_WATCHDOG_INTERVAL_MS)
+  }
+
+  stopHealthCheck() {
+    if (this.healthCheckTimer) {
+      clearInterval(this.healthCheckTimer)
+      this.healthCheckTimer = null
+    }
+  }
+
+  async forceRestart(reason = 'manual') {
+    if (this.closed) return
+    logInfo(`[${this.number}] forceRestart بسبب: ${reason}`)
+    try {
+      const sock = this.sock
+      try { if (sock && typeof sock.end === 'function') sock.end(undefined) } catch {}
+      this.sock = null
+      this.state = null
+      this.stopKeepAlive()
+      this.consecutiveReconnectFailures = 0
+      this.handledStatusIds.clear()
+      this.lastSocketPong = Date.now()
+      await this.start({ resumed: true })
+    } catch (e) {
+      logError(`[${this.number}] forceRestart`, e?.message || e)
+    }
+  }
+
+  enqueueReactionRetry(msg, participant, reason) {
+    try {
+      const dedup = this.buildStatusDedupKey(msg)
+      if (!this.pendingReactions.find((r) => r.dedup === dedup)) {
+        this.pendingReactions.push({
+          dedup,
+          msg,
+          participant,
+          attempts: 0,
+          firstQueuedAt: Date.now(),
+          lastReason: reason,
+        })
+      }
+      if (this.pendingReactions.length > 200) {
+        this.pendingReactions.splice(0, this.pendingReactions.length - 200)
+      }
+    } catch (e) {
+      logWarn(`[${this.number}] enqueueReactionRetry:`, e?.message || e)
+    }
+  }
+
+  async flushPendingReactions() {
+    if (!this.sock || this.closed) return
+    if (!this.pendingReactions.length) return
+    const now = Date.now()
+    if (now - (this.lastReactionFlushAt || 0) < 5000) return
+    this.lastReactionFlushAt = now
+    const record = db.getNumber(this.userId, this.number)
+    if (!record) { this.pendingReactions = []; return }
+    if (record.autoReactStatus === false) return
+    const snapshot = this.pendingReactions.slice(0, 10)
+    for (const item of snapshot) {
+      if ((item.attempts || 0) >= config.STATUS_REACTION_MAX_RETRIES) {
+        this.pendingReactions = this.pendingReactions.filter((r) => r.dedup !== item.dedup)
+        continue
+      }
+      try {
+        if (!this.isFreshStatus(item.msg, 'retry')) continue
+        const ok = await this.reactToStatus(item.msg, item.participant, { source: 'retry' })
+        if (ok) {
+          this.pendingReactions = this.pendingReactions.filter((r) => r.dedup !== item.dedup)
+        } else {
+          item.attempts = (item.attempts || 0) + 1
+        }
+      } catch (e) {
+        item.attempts = (item.attempts || 0) + 1
+        item.lastReason = e?.message || 'unknown'
+      }
+      await sleep(400)
+    }
+  }
+
   async start(options = {}) {
     if (this.closed) return null
     if (this.startPromise) return this.startPromise
@@ -2242,6 +2370,9 @@ class WaSession {
       this.pairingRequested = false
       this.updateOwnJid()
       this.startKeepAlive()
+      this.startHealthCheck()
+      this.consecutiveReconnectFailures = 0
+      this.lastSocketPong = Date.now()
       db.setStatus(this.userId, this.number, 'connected')
       const emoji = db.getEmoji(this.userId, this.number) || '❤️'
       const resumedSession = this.resumeNotificationPending === true
@@ -2319,6 +2450,7 @@ class WaSession {
       this.sock = null
       this.state = null
       this.stopKeepAlive()
+      this.stopHealthCheck()
 
       if (statusCode === DisconnectReason.loggedOut) {
         if (this.suppressLoggedOutCleanup) {
@@ -2334,7 +2466,22 @@ class WaSession {
       db.setStatus(this.userId, this.number, 'connecting')
       this.pairingRequested = false
       db.incrementMetric('totalReconnects', 1)
-      const delay = getReconnectDelay(statusCode)
+      this.consecutiveReconnectFailures = (this.consecutiveReconnectFailures || 0) + 1
+      const baseDelay = getReconnectDelay(statusCode)
+      const delay = computeReconnectBackoff(baseDelay, this.consecutiveReconnectFailures)
+      logWarn(`[${this.number}] إعادة الاتصال بعد ${delay}ms (محاولة ${this.consecutiveReconnectFailures}/${config.SESSION_MAX_CONSECUTIVE_FAILURES}) بسبب statusCode=${statusCode}`)
+
+      const forceAfter = config.SESSION_MAX_CONSECUTIVE_FAILURES
+      if (forceAfter > 0 && this.consecutiveReconnectFailures >= forceAfter) {
+        logWarn(`[${this.number}] بلوغ حد إعادة الاتصال (${forceAfter}) — تنفيذ forceRestart قوي`)
+        setTimeout(() => {
+          if (this.closed) return
+          this.forceRestart('max-reconnect-failures').catch((e) =>
+            logError(`[${this.number}] force restart after failures`, e?.message || e)
+          )
+        }, delay)
+        return
+      }
 
       if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
       const reconnectGeneration = this.socketGeneration
@@ -2503,7 +2650,7 @@ class WaSession {
         participantNumber: statusOwner.phoneNumber || String(statusParticipant || '').replace(/@.*/, ''),
         participantLabel: statusOwner.label || String(statusParticipant || '').replace('@s.whatsapp.net', ''),
         reactedAt: Date.now(),
-        source: 'auto',
+        source: opts.source === 'retry' ? 'retry' : 'auto',
       })
 
       if (db.hasActiveFeature?.(this.userId, this.number, 'reaction_alerts_7d')) {
@@ -2530,20 +2677,33 @@ class WaSession {
       return true
     } catch (e) {
       logWarn(`[${this.number}] فشل التفاعل على الحالة:`, e?.message || e)
+      try { this.enqueueReactionRetry(msg, statusParticipant, e?.message || 'unknown') } catch {}
       return false
     }
   }
 
   async processStatusNow(msg, participant) {
     const record = db.getNumber(this.userId, this.number)
-    if (!record) return
-
-    // تفاعل فوري بدون انتظار طوابير صناعية
+    if (!record) return false
+    let reactionResult = null
     const tasks = []
-    if (record.autoViewStatus !== false) tasks.push(this.markStatusSeen(msg, participant))
-    if (record.autoReactStatus !== false) tasks.push(this.reactToStatus(msg, participant))
-    if (!tasks.length) return
+    if (record.autoViewStatus !== false) {
+      tasks.push(this.markStatusSeen(msg, participant).catch(() => false))
+    }
+    if (record.autoReactStatus !== false) {
+      tasks.push(
+        this.reactToStatus(msg, participant, { source: 'live' })
+          .then((ok) => { reactionResult = ok; return ok })
+          .catch((e) => {
+            reactionResult = false
+            logWarn(`[${this.number}] reactToStatus rejected:`, e?.message || e)
+            return false
+          })
+      )
+    }
+    if (!tasks.length) return false
     await Promise.allSettled(tasks)
+    return reactionResult === true
   }
 
   async handleSingleStatus(msg, source = 'unknown') {
@@ -2556,10 +2716,16 @@ class WaSession {
     this.pruneHandledStatuses()
 
     const participant = this.extractStatusParticipant(msg)
-    // تنفيذ فوري بدون طابور منظم
-    this.processStatusNow(msg, participant).catch((e) =>
+    try {
+      const ok = await this.processStatusNow(msg, participant)
+      if (!ok) {
+        logWarn(`[${this.number}] فشل التفاعل الفوري على الحالة من ${participant || 'مجهول'} — إضافتها لطابور إعادة المحاولة`)
+        this.enqueueReactionRetry(msg, participant, 'init-failed')
+      }
+    } catch (e) {
       logError(`[${this.number}] status handler`, e?.message || e)
-    )
+      this.enqueueReactionRetry(msg, participant, e?.message || 'exception')
+    }
   }
 
   // معالجة أوامر المالك داخل الرقم المربوط

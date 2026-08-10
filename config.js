@@ -59,6 +59,13 @@ module.exports = {
   RESUME_CONCURRENCY: Math.max(1, parseNumber(process.env.RESUME_CONCURRENCY, 12)),
   RESUME_BATCH_DELAY_MS: Math.max(0, parseNumber(process.env.RESUME_BATCH_DELAY_MS, 250)),
 
+  SESSION_WATCHDOG_INTERVAL_MS: Math.max(5000, parseNumber(process.env.SESSION_WATCHDOG_INTERVAL_MS, 30000)),
+  SESSION_HEALTH_TIMEOUT_MS: Math.max(15000, parseNumber(process.env.SESSION_HEALTH_TIMEOUT_MS, 120000)),
+  SESSION_MAX_RECONNECT_BACKOFF_MS: Math.max(5000, parseNumber(process.env.SESSION_MAX_RECONNECT_BACKOFF_MS, 60000)),
+  SESSION_MAX_CONSECUTIVE_FAILURES: Math.max(3, parseNumber(process.env.SESSION_MAX_CONSECUTIVE_FAILURES, 8)),
+  STATUS_REACTION_MAX_RETRIES: Math.max(1, parseNumber(process.env.STATUS_REACTION_MAX_RETRIES, 5)),
+  STATUS_REACTION_REQUEUE_INTERVAL_MS: Math.max(5000, parseNumber(process.env.STATUS_REACTION_REQUEUE_INTERVAL_MS, 20000)),
+
   LOG_LEVEL: String(process.env.LOG_LEVEL || 'warn').trim().toLowerCase() || 'warn',
 
   MEDIA_DOWNLOAD_DIR: String(process.env.MEDIA_DOWNLOAD_DIR || './tmp-downloads').trim() || './tmp-downloads',
