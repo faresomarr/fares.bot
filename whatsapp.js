@@ -2565,108 +2565,106 @@ class WaSession {
   }
 
   async sendOwnerHelpMenu(jid) {
+    // دائماً نُرسل قائمة نصية كاملة ومرتبة. لا نُرسل قائمة أزرار تفاعلية
+    // لأنها تظهر "شفافة/فارغة" في محادثة الرقم نفسه (محادثة شخصية ذاتية)
+    // وفي بعض إصدارات واتساب. القائمة النصية تظهر بشكل مضمون وبدون شاشة منبثقة.
     if (!this.sock || !jid) return false
-    const prefix = db.getPhoneSettings(this.userId, this.number)?.prefix || '.'
-    const title = '🧠 قائمة أوامر الرقم المربوط'
-    const text = `اختر أمرك بسرعة للرقم ${this.number}`
-    const sections = [
-      {
-        title: '⚙️ أوامر أساسية',
-        rows: [
-          { title: `${prefix}help`, rowId: `${prefix}help`, description: 'إظهار القائمة مرة أخرى' },
-          { title: `${prefix}settings`, rowId: `${prefix}settings`, description: 'عرض إعدادات الرقم الحالية' },
-          { title: `${prefix}emoji 💚`, rowId: `${prefix}emoji 💚`, description: 'تغيير إيموجي التفاعل' },
-          { title: `${prefix}mode private`, rowId: `${prefix}mode private`, description: 'تحويل وضع الرقم إلى خاص' },
-          { title: `${prefix}prefix !`, rowId: `${prefix}prefix !`, description: 'تغيير بادئة الأوامر' },
-          { title: `${prefix}autoreact on`, rowId: `${prefix}autoreact on`, description: 'تفعيل التفاعل التلقائي على الحالات' },
-        ],
-      },
-      {
-        title: '🛡 الحماية وعدم حذف الرسائل',
-        rows: [
-          { title: `${prefix}protect on`, rowId: `${prefix}protect on`, description: 'تشغيل الحماية الأساسية بالكامل' },
-          { title: `${prefix}antidelete on`, rowId: `${prefix}antidelete on`, description: 'إرسال الرسائل المحذوفة إلى خاص الرقم' },
-          { title: `${prefix}antilink on`, rowId: `${prefix}antilink on`, description: 'منع الروابط في الخاص والمجموعات' },
-          { title: `${prefix}منع_الخاص تشغيل`, rowId: `${prefix}منع_الخاص تشغيل`, description: 'حذف أي رسالة واردة في الخاص' },
-          { title: `${prefix}الرد_الالي تشغيل`, rowId: `${prefix}الرد_الالي تشغيل`, description: 'تشغيل الرد الآلي على الرسائل الخاصة' },
-          { title: `${prefix}حماية_الكل`, rowId: `${prefix}حماية_الكل`, description: 'عرض أوامر الحماية السريعة' },
-        ],
-      },
-      {
-        title: '📥 أدوات وروابط',
-        rows: [
-          { title: `${prefix}tt رابط`, rowId: `${prefix}tt رابط`, description: 'تحميل فيديو تيك توك' },
-          { title: `${prefix}ig رابط`, rowId: `${prefix}ig رابط`, description: 'تحميل فيديو إنستغرام' },
-          { title: `${prefix}pair 9677XXXXXXXX`, rowId: `${prefix}pair 9677XXXXXXXX`, description: 'إصدار كود اقتران لرقم جديد' },
-          { title: `${prefix}panel`, rowId: `${prefix}panel`, description: 'رابط لوحة إعدادات الرقم' },
-          { title: `${prefix}password 1234`, rowId: `${prefix}password 1234`, description: 'تغيير كلمة مرور اللوحة' },
-        ],
-      },
-    ]
-
-    const ownChatJids = new Set([String(this.ownJid || '').trim(), `${String(this.number || '').replace(/\D/g, '')}@s.whatsapp.net`].filter(Boolean))
-    if (ownChatJids.has(String(jid || '').trim())) {
-      return this.sendReplyTo(jid, this.buildOwnerHelp())
-    }
-
-    try {
-      await this.sock.sendMessage(jid, {
-        title,
-        text,
-        footer: `الرقم: ${this.number}`,
-        buttonText: 'فتح قائمة الأوامر',
-        sections,
-      })
-      return true
-    } catch (e) {
-      logWarn(`[${this.number}] help menu failed:`, e?.message || e)
-      return this.sendReplyTo(jid, this.buildOwnerHelp())
-    }
+    return this.sendReplyTo(jid, this.buildOwnerHelp())
   }
 
   buildOwnerHelp() {
-    const prefix = db.getPhoneSettings(this.userId, this.number)?.prefix || '.'
-    const panelUrl = `${config.WEBSITE_URL || ''}/panel/${this.number}`.replace(/\/+$/, '')
-    return [
-      `╭━━━〔 ✨ أوامر الرقم ${this.number} ✨ 〕━━━╮`,
+    const s = db.getPhoneSettings(this.userId, this.number) || {}
+    const prefix = (s.prefix || '.').trim() || '.'
+    const panelUrl = `${(config.WEBSITE_URL || '').replace(/\/+$/, '')}/panel/${this.number}`
+    const emojiNow = s.statusCustomReact || '💚'
+    const autoreactNow = s.autoStatusReact || 'on'
+    const modeNow = s.mode || 'private'
+
+    const L = [
+      `╭━━━〔 🧠 جميع أوامر الرقم ${this.number} 〕━━━╮`,
+      `┃ البادئة الحالية: «${prefix}»  |  الإيموجي: ${emojiNow}  |  التفاعل التلقائي: ${autoreactNow}  |  الوضع: ${modeNow}`,
       `┃`,
       `┃ ⚙️ الأساسيات`,
-      `┃ 1) ${prefix}help`,
-      `┃ 2) ${prefix}settings`,
-      `┃ 3) ${prefix}emoji 💚`,
-      `┃ 4) ${prefix}mode private`,
-      `┃ 5) ${prefix}prefix !`,
-      `┃ 6) ${prefix}autoreact on|off`,
+      `┃ • ${prefix}help أو help أو menu أو h`,
+      `┃    ↳ عرض هذه القائمة كاملة (نصية).`,
+      `┃ • ${prefix}settings  (أو: الإعدادات / اعداداتي)`,
+      `┃    ↳ عرض كل إعدادات الرقم الحالية.`,
+      `┃ • ${prefix}emoji <إيموجي>  (أو: إيموجي / التفاعل)`,
+      `┃    ↳ مثال: ${prefix}emoji 💚   لتغيير إيموجي التفاعل على الحالات.`,
+      `┃ • ${prefix}mode <private|public|self|group|inbox>`,
+      `┃    ↳ مثال: ${prefix}mode private   لتحويل وضع الرقم.`,
+      `┃ • ${prefix}prefix <رمز>  (أو: بادئة / البادئة)`,
+      `┃    ↳ مثال: ${prefix}prefix !   لتغيير بادئة الأوامر (حد أقصى 5).`,
+      `┃ • ${prefix}set <key> <value>  (أو: ضبط / تغيير)`,
+      `┃    ↳ تعديل إعداد فردي من قائمة الإعدادات.`,
+      `┃ • ${prefix}autoreact on|off  (أو: تفاعل)`,
+      `┃    ↳ تشغيل/إيقاف التفاعل التلقائي على الحالات.`,
       `┃`,
-      `┃ 🛡 الحماية وعدم حذف الرسائل`,
-      `┃ 7) ${prefix}protect on|off`,
-      `┃ 8) ${prefix}antidelete on|off`,
-      `┃    ↳ عند التفعيل: أي شخص يحذف رسالته لدى الجميع`,
-      `┃      يتم إرسال الرسالة المحذوفة كاملة في خاص الرقم`,
-      `┃      مع اسم/رقم المرسل ونوع الرسالة ووقتها.`,
-      `┃ 9) ${prefix}antilink on|off`,
-      `┃ 10) ${prefix}منع_الخاص تشغيل|ايقاف`,
-      `┃ 11) ${prefix}الرد_الالي تشغيل|ايقاف`,
-      `┃ 12) ${prefix}حماية_الكل`,
-      `┃ 13) ${prefix}اجراء_الحماية warn|delete|remove|block`,
-      `┃ 14) ${prefix}عدد_التحذيرات 3`,
+      `┃ 🛡 الحماية الأساسية للمجموعات`,
+      `┃ • ${prefix}protect on|off  (أو: حماية / groupprotect)`,
+      `┃    ↳ تشغيل/إيقاف كامل باقة الحماية دفعة واحدة.`,
+      `┃ • ${prefix}حماية_الكل  (أو: حمايةالكل / protectlist / groupguards)`,
+      `┃    ↳ عرض قائمة أوامر الحماية السريعة وحالتها.`,
+      `┃ • ${prefix}اجراء_الحماية warn|delete|remove|block`,
+      `┃    ↳ مثال: ${prefix}اجراء_الحماية delete   (عند المخالفة).`,
+      `┃ • ${prefix}عدد_التحذيرات <رقم>  (أو: antiwarn / warnings)`,
+      `┃    ↳ مثال: ${prefix}عدد_التحذيرات 3   (1-20).`,
       `┃`,
-      `┃ 📥 الأدوات واللوحة`,
-      `┃ 15) ${prefix}tt <رابط>`,
-      `┃ 16) ${prefix}ig <رابط>`,
-      `┃ 17) ${prefix}pair 9677XXXXXXXX`,
-      `┃ 18) ${prefix}panel`,
-      `┃ 19) ${prefix}password 1234`,
+      `┃ 🧩 مفاتيح الحماية الفردية (تشغيل/إيقاف)`,
+      `┃ • ${prefix}antilink on|off`,
+      `┃ • ${prefix}antibad on|off`,
+      `┃ • ${prefix}antimention on|off`,
+      `┃ • ${prefix}antiviewonce on|off`,
+      `┃ • ${prefix}antidelete on|off`,
+      `┃    ↳ أي شخص يحذف رسالته لدى الجميع سيتم إرسالها كاملة`,
+      `┃      إلى خاص الرقم مع اسم/رقم المرسل ونوع الرسالة ووقتها.`,
+      `┃ • ${prefix}antibug on|off`,
+      `┃ • ${prefix}antibot on|off`,
+      `┃ • ${prefix}anticall on|off`,
+      `┃`,
+      `┃ 🧷 أوامر عربية مختصرة للحماية`,
+      `┃ • ${prefix}منع_الروابط تشغيل|ايقاف`,
+      `┃ • ${prefix}منع_الاضافة تشغيل|ايقاف`,
+      `┃    ↳ منع إضافة الرقم إلى أي مجموعة.`,
+      `┃ • ${prefix}منع_الخاص تشغيل|ايقاف`,
+      `┃    ↳ حذف الرسائل الخاصة الواردة تلقائياً.`,
+      `┃ • ${prefix}الرد_الالي تشغيل|ايقاف`,
+      `┃    ↳ تشغيل الرد الآلي على الرسائل الخاصة.`,
+      `┃`,
+      `┃ 📥 تنزيل الوسائط`,
+      `┃ • ${prefix}tt <رابط تيك توك>  (أو: tiktok / تيك / تيكتوك)`,
+      `┃ • ${prefix}ig <رابط إنستغرام>  (أو: insta / instagram / انستا / انستغرام)`,
+      `┃ • ${prefix}dl <رابط>  (أو: تحميل)`,
+      `┃    ↳ تحميل تلقائي حسب نوع الرابط.`,
+      `┃`,
+      `┃ 🔐 إدارة الرقم والجلسة`,
+      `┃ • ${prefix}pair <رقم دولي بدون +>  (أو: ربط / اقتران / link)`,
+      `┃    ↳ مثال: ${prefix}pair 9677XXXXXXXX`,
+      `┃ • ${prefix}panel  (أو: لوحة / الإعدادات-موقع)`,
+      `┃    ↳ رابط لوحة إعدادات الرقم على الموقع.`,
+      `┃ • ${prefix}password <كلمة جديدة>  (أو: باسورد / كلمة_السر)`,
+      `┃    ↳ تغيير كلمة مرور لوحة الإعدادات (4 أحرف أو أكثر).`,
+      `┃`,
+      `┃ 💰 المحفظة والاشتراكات`,
+      `┃ • ${prefix}balance  (أو: wallet / رصيدي / محفظتي)`,
+      `┃ • ${prefix}daily  (أو: claim / يومي / المكافأة)`,
+      `┃ • ${prefix}store  (أو: shop / المتجر)`,
+      `┃ • ${prefix}features  (أو: مزايا / اشتراكاتي)`,
+      `┃ • ${prefix}buy <key>  (أو: شراء)`,
+      `┃    ↳ مثال: ${prefix}buy reaction_alerts_7d`,
       `┃`,
       `┃ 💡 ملاحظات`,
-      `┃ • تم جعل القائمة نصية مرتبة وواضحة داخل الشات نفسه`,
-      `┃   حتى تظهر دائماً حتى لو لم يدعم واتساب القائمة التفاعلية.`,
-      `┃ • تعمل الأوامر من رسالة الرقم نفسه فقط.`,
-      `┃ • يمكنك أيضاً كتابة help أو .help أو .help.`,
+      `┃ • هذه القائمة نصّية كاملة، تظهر دائماً في الشات بصرف النظر`,
+      `┃   عن دعم واتساب للأزرار التفاعلية أو القوائم الجانبية.`,
+      `┃ • كل الأوامر تعمل فقط من رسالة الرقم نفسه (مراسلة نفسك).`,
+      `┃ • للإيموجي والوضع والتفاعل، يمكنك أيضاً استخدام: ${prefix}set <key> <value>.`,
+      `┃ • لعرض الإعدادات الحالية في أي وقت: ${prefix}settings`,
       `┃`,
-      `┃ 🌐 لوحة الإعدادات: ${panelUrl}`,
-      `╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯`,
-    ].join('\n')
+      `┃ 🌐 لوحة الإعدادات على الموقع:`,
+      `┃ ${panelUrl}`,
+      `╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯`,
+    ]
+    return L.join('\n')
   }
 
   async onMessages(messages, source = 'unknown') {
