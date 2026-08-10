@@ -251,9 +251,80 @@ function getReconnectDelay(statusCode) {
   return 3000
 }
 
+function getJidServer(value) {
+  const raw = String(value || '').trim()
+  const at = raw.lastIndexOf('@')
+  return at >= 0 ? raw.slice(at + 1).toLowerCase() : ''
+}
+
+function isPnUserJid(value) {
+  const server = getJidServer(value)
+  return server === 's.whatsapp.net' || server === 'c.us' || server === 'hosted'
+}
+
+function isLidUserJid(value) {
+  const server = getJidServer(value)
+  return server === 'lid' || server === 'hosted.lid'
+}
+
+function extractUserPart(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  const withoutServer = raw.replace(/@.*$/, '')
+  return withoutServer.split(':')[0].trim()
+}
+
+function normalizePossiblePhone(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  if (isLidUserJid(raw)) return ''
+  const userPart = extractUserPart(raw)
+  const digits = userPart.replace(/\D/g, '')
+  if (digits.length >= 5 && digits.length <= 20) return digits
+  if (!raw.includes('@')) {
+    const direct = raw.replace(/\D/g, '')
+    if (direct.length >= 5 && direct.length <= 20) return direct
+  }
+  return ''
+}
+
+function firstPhoneCandidate(...values) {
+  for (const value of values) {
+    const phone = normalizePossiblePhone(value)
+    if (phone) return phone
+  }
+  return ''
+}
+
+function pickPreferredUserJid(...values) {
+  const cleaned = values
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+
+  for (const value of cleaned) {
+    if (isPnUserJid(value)) {
+      try { return jidNormalizedUser(value) } catch { return value }
+    }
+  }
+
+  for (const value of cleaned) {
+    if (isLidUserJid(value)) {
+      try { return jidNormalizedUser(value) } catch { return value }
+    }
+  }
+
+  const phone = firstPhoneCandidate(...cleaned)
+  if (phone) {
+    const pnJid = `${phone}@s.whatsapp.net`
+    try { return jidNormalizedUser(pnJid) } catch { return pnJid }
+  }
+
+  return cleaned[0] || ''
+}
+
 function buildSelfJidCandidates(sock, phoneNumber) {
   const candidates = []
-  const pn = String(phoneNumber || '').replace(/\D/g, '')
+  const pn = firstPhoneCandidate(phoneNumber)
   if (pn) {
     candidates.push(`${pn}@s.whatsapp.net`)
     candidates.push(jidNormalizedUser(`${pn}@s.whatsapp.net`))
@@ -796,12 +867,14 @@ class WaSession {
     try {
       const raw = msg?.message && typeof msg.message === 'object' ? msg.message : {}
       const inner = unwrapMessageObject(raw)
-      const remoteJid = String(msg?.key?.remoteJid || '').trim()
+      const actualRemoteJid = String(msg?.key?.remoteJid || '').trim()
+      const remoteJid = pickPreferredUserJid(msg?.key?.remoteJidAlt, actualRemoteJid)
+      const remoteJidAlt = pickPreferredUserJid(actualRemoteJid, msg?.key?.remoteJidAlt)
       const id = String(msg?.key?.id || '').trim()
       const sender = this.extractSenderJid(msg)
       if (!remoteJid || !id || remoteJid === STATUS_JID) {
         // للحالات يتم تخزينها بشكل منفصل
-        if (remoteJid === STATUS_JID) {
+        if (actualRemoteJid === STATUS_JID || remoteJid === STATUS_JID) {
           this.cacheStatusForRevokeRecovery(msg)
           return
         }
@@ -810,14 +883,21 @@ class WaSession {
       const isMedia = !!(inner?.imageMessage || inner?.videoMessage || inner?.audioMessage || inner?.documentMessage || inner?.stickerMessage)
       const key = `${remoteJid}::${id}`
       const senderInfo = this.getResolvedContactInfo(sender, {
+        jidAlt: msg?.key?.participantAlt || msg?.key?.remoteJidAlt,
+        participantAlt: msg?.key?.participantAlt,
+        remoteJidAlt: msg?.key?.remoteJidAlt,
+        participantPn: msg?.key?.participantPn,
+        senderPn: msg?.key?.senderPn,
         pushName: String(msg?.pushName || '').trim(),
       })
       const entry = {
         key: msg.key,
         remoteJid,
+        remoteJidAlt,
         messageId: id,
         senderJid: sender,
-        senderNumber: senderInfo.phoneNumber || String(sender || '').replace(/@.*$/, '').replace(/[^\d]/g, ''),
+        senderAltJid: pickPreferredUserJid(msg?.key?.participantAlt, msg?.key?.remoteJidAlt),
+        senderNumber: senderInfo.phoneNumber || firstPhoneCandidate(msg?.key?.participantPn, msg?.key?.senderPn, msg?.key?.participantAlt, msg?.key?.remoteJidAlt, sender),
         senderPushName: String(msg?.pushName || '').trim(),
         senderDisplayName: senderInfo.label || String(msg?.pushName || '').trim(),
         fromMe: !!msg?.key?.fromMe,
@@ -844,19 +924,32 @@ class WaSession {
     try {
       const raw = msg?.message && typeof msg.message === 'object' ? msg.message : {}
       const inner = unwrapMessageObject(raw)
-      const participant = String(msg?.key?.participant || msg?.participant || '').trim()
+      const participant = this.extractStatusParticipant(msg)
+      const participantAlt = pickPreferredUserJid(
+        msg?.key?.participantAlt,
+        msg?.participantAlt,
+        msg?.key?.remoteJidAlt,
+        msg?.participant,
+        msg?.key?.participant
+      )
       const id = String(msg?.key?.id || '').trim()
       if (!participant || !id) return
       const isMedia = !!(inner?.imageMessage || inner?.videoMessage)
       const key = `${participant}::${id}`
       const text = inner?.conversation || inner?.extendedTextMessage?.text || inner?.imageMessage?.caption || inner?.videoMessage?.caption || ''
       const participantInfo = this.getResolvedContactInfo(participant, {
+        jidAlt: participantAlt,
+        participantAlt: msg?.key?.participantAlt || msg?.participantAlt,
+        remoteJidAlt: msg?.key?.remoteJidAlt,
+        participantPn: msg?.key?.participantPn || msg?.participantPn,
+        senderPn: msg?.key?.senderPn || msg?.senderPn,
         pushName: String(msg?.pushName || '').trim(),
       })
       const entry = {
         key: msg.key,
         participantJid: participant,
-        participantNumber: participantInfo.phoneNumber || String(participant || '').replace(/@.*$/, '').replace(/[^\d]/g, ''),
+        participantAltJid: participantAlt,
+        participantNumber: participantInfo.phoneNumber || firstPhoneCandidate(msg?.key?.participantPn, msg?.participantPn, msg?.key?.senderPn, msg?.senderPn, msg?.key?.participantAlt, msg?.participantAlt, participant),
         participantDisplayName: participantInfo.label || String(msg?.pushName || '').trim(),
         messageId: id,
         text: String(text || '').trim(),
@@ -910,7 +1003,12 @@ class WaSession {
     if (!raw) return []
     out.add(raw)
     try { out.add(jidNormalizedUser(raw)) } catch {}
-    const phone = raw.replace(/@.*$/, '').replace(/[^\d]/g, '')
+    const preferredJid = pickPreferredUserJid(raw)
+    if (preferredJid) {
+      out.add(preferredJid)
+      try { out.add(jidNormalizedUser(preferredJid)) } catch {}
+    }
+    const phone = normalizePossiblePhone(raw)
     if (phone) {
       out.add(phone)
       out.add(`${phone}@s.whatsapp.net`)
@@ -931,14 +1029,68 @@ class WaSession {
   }
 
   rememberContactProfile(entry = {}, extra = {}) {
-    const jid = String(entry?.id || entry?.jid || entry?.participant || extra?.jid || extra?.participant || '').trim()
-    const phone = String(entry?.phoneNumber || extra?.phoneNumber || jid).replace(/@.*$/, '').replace(/[^\d]/g, '')
-    const keys = new Set([
-      ...this.buildContactCacheKeys(jid),
-      ...this.buildContactCacheKeys(phone),
-      ...this.buildContactCacheKeys(entry?.lid),
-      ...this.buildContactCacheKeys(extra?.lid),
-    ])
+    const jidCandidates = [
+      entry?.id,
+      entry?.jid,
+      entry?.participant,
+      entry?.participantAlt,
+      entry?.remoteJid,
+      entry?.remoteJidAlt,
+      entry?.lid,
+      entry?.phoneJid,
+      extra?.jid,
+      extra?.participant,
+      extra?.participantAlt,
+      extra?.remoteJid,
+      extra?.remoteJidAlt,
+      extra?.lid,
+      extra?.phoneJid,
+    ].map((value) => String(value || '').trim()).filter(Boolean)
+    const phone = firstPhoneCandidate(
+      entry?.phoneNumber,
+      entry?.participantPn,
+      entry?.senderPn,
+      entry?.remoteJidAlt,
+      entry?.participantAlt,
+      entry?.jid,
+      entry?.id,
+      extra?.phoneNumber,
+      extra?.number,
+      extra?.participantPn,
+      extra?.senderPn,
+      extra?.remoteJidAlt,
+      extra?.participantAlt,
+      extra?.jid,
+      extra?.participant,
+      extra?.remoteJid
+    )
+    const jid = pickPreferredUserJid(
+      entry?.participantAlt,
+      entry?.remoteJidAlt,
+      entry?.jid,
+      entry?.id,
+      entry?.participant,
+      entry?.remoteJid,
+      extra?.participantAlt,
+      extra?.remoteJidAlt,
+      extra?.jid,
+      extra?.participant,
+      extra?.remoteJid,
+      phone ? `${phone}@s.whatsapp.net` : ''
+    )
+    const lid = pickPreferredUserJid(
+      entry?.lid,
+      isLidUserJid(entry?.id) ? entry?.id : '',
+      isLidUserJid(entry?.jid) ? entry?.jid : '',
+      isLidUserJid(entry?.participant) ? entry?.participant : '',
+      extra?.lid,
+      isLidUserJid(extra?.jid) ? extra?.jid : '',
+      isLidUserJid(extra?.participant) ? extra?.participant : ''
+    )
+    const keys = new Set()
+    for (const candidate of [...jidCandidates, phone, jid, lid]) {
+      for (const key of this.buildContactCacheKeys(candidate)) keys.add(key)
+    }
     if (!keys.size) return null
     const savedName = String(entry?.name || extra?.name || '').trim()
     const notifyName = String(entry?.notify || extra?.notify || '').trim()
@@ -948,6 +1100,7 @@ class WaSession {
     const base = {
       jid: jid || (phone ? `${phone}@s.whatsapp.net` : ''),
       phoneNumber: phone,
+      lid,
       savedName,
       notifyName,
       chatName,
@@ -978,7 +1131,22 @@ class WaSession {
   }
 
   getResolvedContactInfo(jid, fallback = {}) {
-    const keys = this.buildContactCacheKeys(jid)
+    const lookupValues = [
+      jid,
+      fallback?.jid,
+      fallback?.jidAlt,
+      fallback?.participant,
+      fallback?.participantAlt,
+      fallback?.remoteJid,
+      fallback?.remoteJidAlt,
+      fallback?.phoneJid,
+      fallback?.phoneNumber,
+      fallback?.number,
+      fallback?.participantPn,
+      fallback?.senderPn,
+      fallback?.lid,
+    ]
+    const keys = Array.from(new Set(lookupValues.flatMap((value) => this.buildContactCacheKeys(value))))
     let cached = null
     for (const key of keys) {
       const value = this.contactProfileCache.get(key)
@@ -987,31 +1155,56 @@ class WaSession {
         break
       }
     }
-    const phone = String(
-      fallback?.phoneNumber ||
-      fallback?.number ||
-      cached?.phoneNumber ||
-      String(jid || '').replace(/@.*$/, '').replace(/[^\d]/g, '')
-    ).replace(/[^\d]/g, '')
-    const label = this.pickBestContactLabel(cached || {}, fallback || {}) || phone || String(jid || '').trim() || 'غير معروف'
+    const phone = firstPhoneCandidate(
+      fallback?.phoneNumber,
+      fallback?.number,
+      fallback?.participantNumber,
+      fallback?.senderNumber,
+      fallback?.participantPn,
+      fallback?.senderPn,
+      fallback?.phoneJid,
+      fallback?.jidAlt,
+      fallback?.participantAlt,
+      fallback?.remoteJidAlt,
+      cached?.phoneNumber,
+      cached?.jid,
+      jid
+    )
+    const resolvedJid = pickPreferredUserJid(
+      fallback?.jidAlt,
+      fallback?.participantAlt,
+      fallback?.remoteJidAlt,
+      cached?.jid,
+      fallback?.jid,
+      jid,
+      phone ? `${phone}@s.whatsapp.net` : ''
+    )
+    const label = this.pickBestContactLabel(cached || {}, fallback || {}) || phone || resolvedJid || String(jid || '').trim() || 'غير معروف'
     return {
-      jid: String(jid || cached?.jid || '').trim(),
+      jid: String(resolvedJid || jid || cached?.jid || '').trim(),
       phoneNumber: phone,
       label,
       savedName: String(cached?.savedName || fallback?.savedName || '').trim(),
       notifyName: String(cached?.notifyName || fallback?.notifyName || '').trim(),
       pushName: String(cached?.pushName || fallback?.pushName || '').trim(),
       chatName: String(cached?.chatName || fallback?.chatName || '').trim(),
+      lid: String(cached?.lid || fallback?.lid || '').trim(),
     }
   }
 
   buildRevokeTargetKey(msg) {
     const protocolKey = msg?.message?.protocolMessage?.key || {}
     const remoteJid = String(protocolKey?.remoteJid || msg?.key?.remoteJid || '').trim()
+    const remoteJidAlt = String(protocolKey?.remoteJidAlt || msg?.key?.remoteJidAlt || '').trim()
     const id = String(protocolKey?.id || '').trim()
     const participant = String(protocolKey?.participant || msg?.key?.participant || msg?.participant || '').trim()
-    if (!remoteJid || !id) return null
-    return { ...protocolKey, remoteJid, id, participant }
+    const participantAlt = String(protocolKey?.participantAlt || msg?.key?.participantAlt || msg?.participantAlt || '').trim()
+    const participantPn = String(protocolKey?.participantPn || msg?.key?.participantPn || msg?.participantPn || '').trim()
+    const senderPn = String(protocolKey?.senderPn || msg?.key?.senderPn || msg?.senderPn || '').trim()
+    const resolvedRemoteJid = pickPreferredUserJid(remoteJidAlt, remoteJid)
+    const resolvedParticipant = pickPreferredUserJid(participantAlt, participantPn, senderPn, participant, remoteJidAlt)
+    if (!resolvedRemoteJid || !id) return null
+    return { ...protocolKey, remoteJid: resolvedRemoteJid, remoteJidAlt, id, participant: resolvedParticipant, participantAlt, participantPn, senderPn }
   }
 
   // تنزيل ميديا الرسالة من بروتوكول بايليس (إن وجدت في الرسالة المخزنة) ثم إعادة إرسالها كصورة/فيديو حقيقي قابل للحفظ في معرض الجوال
@@ -1042,10 +1235,12 @@ class WaSession {
     if (!this.sock || !entry) return false
     const senderInfo = this.getResolvedContactInfo(entry.senderJid, {
       number: entry.senderNumber,
+      jidAlt: entry.senderAltJid,
+      participantAlt: entry.senderAltJid,
       pushName: entry.senderPushName,
       savedName: entry.senderDisplayName,
     })
-    const sender = senderInfo.phoneNumber || entry.senderNumber || String(entry.senderJid || '').replace(/@.*$/, '').replace(/[^\d]/g, '')
+    const sender = senderInfo.phoneNumber || entry.senderNumber || firstPhoneCandidate(entry.senderAltJid, entry.senderJid)
     const senderNumberLabel = `+${sender || 'غير معروف'}`
     const lines = [
       `🛡️ ${reasonLabel}`,
@@ -1135,10 +1330,12 @@ class WaSession {
     if (!this.sock || !entry) return false
     const senderInfo = this.getResolvedContactInfo(entry.participantJid, {
       number: entry.participantNumber,
+      jidAlt: entry.participantAltJid,
+      participantAlt: entry.participantAltJid,
       pushName: entry.participantDisplayName,
       savedName: entry.participantDisplayName,
     })
-    const sender = senderInfo.phoneNumber || entry.participantNumber || String(entry.participantJid || '').replace(/@.*$/, '').replace(/[^\d]/g, '')
+    const sender = senderInfo.phoneNumber || entry.participantNumber || firstPhoneCandidate(entry.participantAltJid, entry.participantJid)
     const senderNumberLabel = `+${sender || 'غير معروف'}`
     const lines = [
       `🛡️ ${reasonLabel}`,
@@ -1196,7 +1393,7 @@ class WaSession {
   // استدعاء عند رصد حذف رسالة من المحادثات (بالإضافة للمجموعات الموجودة)
   async handleDeletedMessageRevoke(evictedKey) {
     try {
-      const remoteJid = String(evictedKey?.remoteJid || '').trim()
+      const remoteJid = pickPreferredUserJid(evictedKey?.remoteJidAlt, evictedKey?.remoteJid)
       const id = String(evictedKey?.id || '').trim()
       if (!remoteJid || !id) return
       if (remoteJid === STATUS_JID) return
@@ -1216,7 +1413,7 @@ class WaSession {
     try {
       const remoteJid = String(evictedKey?.remoteJid || '').trim()
       const id = String(evictedKey?.id || '').trim()
-      const participant = String(evictedKey?.participant || '').trim()
+      const participant = pickPreferredUserJid(evictedKey?.participantAlt, evictedKey?.participantPn, evictedKey?.senderPn, evictedKey?.participant)
       if (remoteJid !== STATUS_JID || !id) return
       const entry = (participant ? this.getCachedStatus(participant, id) : null) || this.findCachedStatusById(id)
       if (!entry) return
@@ -1291,7 +1488,21 @@ class WaSession {
   }
 
   extractSenderJid(msg) {
-    return String(msg?.key?.participant || msg?.participant || msg?.key?.remoteJid || '').trim()
+    return pickPreferredUserJid(
+      msg?.key?.participantAlt,
+      msg?.participantAlt,
+      msg?.key?.participantPn,
+      msg?.participantPn,
+      msg?.key?.senderPn,
+      msg?.senderPn,
+      msg?.message?.protocolMessage?.key?.participantAlt,
+      msg?.message?.protocolMessage?.key?.participantPn,
+      msg?.key?.participant,
+      msg?.participant,
+      msg?.key?.remoteJidAlt,
+      msg?.message?.protocolMessage?.key?.remoteJidAlt,
+      msg?.key?.remoteJid
+    )
   }
 
   pruneStoredMessages(maxAgeMs = 1000 * 60 * 60 * 6, maxEntries = 2000) {
@@ -2182,23 +2393,31 @@ class WaSession {
   }
 
   extractStatusParticipant(msg) {
-    const candidates = [
+    const participant = pickPreferredUserJid(
+      msg?.key?.participantAlt,
+      msg?.participantAlt,
+      msg?.key?.participantPn,
+      msg?.participantPn,
+      msg?.key?.senderPn,
+      msg?.senderPn,
+      msg?.message?.protocolMessage?.key?.participantAlt,
+      msg?.message?.protocolMessage?.key?.participantPn,
+      msg?.message?.extendedTextMessage?.contextInfo?.participantAlt,
+      msg?.message?.extendedTextMessage?.contextInfo?.participant,
+      msg?.message?.imageMessage?.contextInfo?.participantAlt,
+      msg?.message?.imageMessage?.contextInfo?.participant,
+      msg?.message?.videoMessage?.contextInfo?.participantAlt,
+      msg?.message?.videoMessage?.contextInfo?.participant,
+      msg?.message?.audioMessage?.contextInfo?.participantAlt,
+      msg?.message?.audioMessage?.contextInfo?.participant,
+      msg?.message?.reactionMessage?.key?.participantAlt,
+      msg?.message?.reactionMessage?.key?.participant,
       msg?.key?.participant,
       msg?.participant,
-      msg?.message?.protocolMessage?.key?.participant,
-      msg?.message?.extendedTextMessage?.contextInfo?.participant,
-      msg?.message?.imageMessage?.contextInfo?.participant,
-      msg?.message?.videoMessage?.contextInfo?.participant,
-      msg?.message?.audioMessage?.contextInfo?.participant,
-      msg?.message?.reactionMessage?.key?.participant,
-      msg.key?.remoteJidAlt,
-      msg.key?.remoteJid,
-    ]
-    for (const candidate of candidates) {
-      const value = String(candidate || '').trim()
-      if (value && value !== STATUS_JID && value.endsWith('@s.whatsapp.net')) return value
-    }
-    return ''
+      msg?.key?.remoteJidAlt,
+      msg?.key?.remoteJid
+    )
+    return participant && participant !== STATUS_JID ? participant : ''
   }
 
   buildStatusDedupKey(msg) {
