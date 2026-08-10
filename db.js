@@ -114,6 +114,7 @@ const DEFAULT_PHONE_SETTINGS = {
   gaCloseTime: '15:00',
   gaOpenTime: '05:00',
   customAutoReplies: '',
+  autoReply: 'off',
   autoSave: 'off',
   language: 'arabic',
   antiViewOnce: 'off',

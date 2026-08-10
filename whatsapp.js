@@ -541,6 +541,71 @@ function parseListSetting(value) {
     .filter(Boolean)
 }
 
+function hasArabicLetters(text) {
+  return /[\u0600-\u06FF]/.test(String(text || ''))
+}
+
+function hasLatinLetters(text) {
+  return /[A-Za-z]/.test(String(text || ''))
+}
+
+function normalizeComparableText(text) {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[\u064B-\u065F\u0670]/g, '')
+    .replace(/[إأآا]/g, 'ا')
+    .replace(/ة/g, 'ه')
+    .replace(/ى/g, 'ي')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function parseCustomAutoReplyRules(value) {
+  return String(value || '')
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^(.+?)\s*(?:=>|=|:|\|)\s*(.+)$/)
+      if (!match) return null
+      const trigger = normalizeComparableText(match[1])
+      const reply = String(match[2] || '').trim()
+      return trigger && reply ? { trigger, reply } : null
+    })
+    .filter(Boolean)
+}
+
+const DEFAULT_AUTO_REPLY_RULES = [
+  { patterns: [/^(السلام عليكم|سلام عليكم|سلام|سلام)$/i], reply: 'وعليكم السلام ورحمة الله وبركاته 🌷' },
+  { patterns: [/(مرحبا|اهلا|أهلا|هلا|السلام)/i], reply: 'أهلًا وسهلًا 🌷' },
+  { patterns: [/(كيف حالك|شلونك|كيفك|عامل ايه|عامل اي)/i], reply: 'الحمد لله بخير، شكرًا لسؤالك 🌷' },
+  { patterns: [/(شكرا|مشكور|يسلمو|تسلم|يعطيك العافيه|يعطيك العافية)/i], reply: 'العفو، تحت أمرك 🌷' },
+  { patterns: [/^(hi|hello|hey|hola)$/i], reply: 'Hello 🌷 How can I help you?' },
+  { patterns: [/good\s*morning/i], reply: 'Good morning 🌷' },
+  { patterns: [/good\s*evening/i], reply: 'Good evening 🌙' },
+  { patterns: [/(thanks|thank you|thx)/i], reply: 'You are welcome 🌷' },
+]
+
+function buildAutoReplyText(rawText, settings = {}) {
+  const text = String(rawText || '').trim()
+  const normalized = normalizeComparableText(text)
+
+  const customRules = parseCustomAutoReplyRules(settings.customAutoReplies)
+  for (const rule of customRules) {
+    if (rule.trigger && normalized.includes(rule.trigger)) return rule.reply
+  }
+
+  for (const rule of DEFAULT_AUTO_REPLY_RULES) {
+    if (rule.patterns.some((pattern) => pattern.test(text))) return rule.reply
+  }
+
+  if (!text) return 'تم استلام رسالتك، وسيتم الرد عليك قريبًا بإذن الله.'
+  if (hasArabicLetters(text)) return 'تم استلام رسالتك، وسيتم الرد عليك قريبًا بإذن الله.'
+  if (hasLatinLetters(text)) return 'Your message has been received. I will reply to you as soon as possible.'
+  return 'تم استلام رسالتك، وسيتم الرد عليك قريبًا بإذن الله.'
+}
+
 function unwrapMessageObject(message) {
   let current = message && typeof message === 'object' ? message : {}
   const seen = new Set()
@@ -716,6 +781,7 @@ const PHONE_SYNONYMS = {
   gaCloseTime: ['gaclosetime', 'وقت.إغلاق', 'gaCloseTime'],
   gaOpenTime: ['gaopentime', 'وقت.فتح', 'gaOpenTime'],
   customAutoReplies: ['customautoreplies', 'ردود.تلقائية', 'customAutoReplies'],
+  autoReply: ['autoreply', 'الردالالي', 'الرد_الالي', 'ردالي', 'رد_الي', 'autoReply'],
   autoSave: ['autosave', 'حفظ.تلقائي', 'autoSave'],
   language: ['language', 'لغة', 'language'],
   antiViewOnce: ['antiviewonce', 'منع.عرض.مرة', 'antiViewOnce'],
@@ -769,6 +835,7 @@ class WaSession {
     this.groupMetadataCache = new Map()
     this.recentIncomingMessages = new Map()
     this.groupWarnings = new Map()
+    this.privateWarnings = new Map()
     this.privateMessageDeleteIds = new Map()
   }
 
@@ -960,6 +1027,63 @@ class WaSession {
     }
   }
 
+  bumpPrivateWarning(participantJid) {
+    const key = String(participantJid || '').trim()
+    const now = Date.now()
+    const previous = this.privateWarnings.get(key)
+    const current = previous && now - Number(previous.lastAt || 0) < 1000 * 60 * 60 * 12
+      ? { count: Number(previous.count || 0), lastAt: Number(previous.lastAt || 0) }
+      : { count: 0, lastAt: 0 }
+    current.count += 1
+    current.lastAt = now
+    this.privateWarnings.set(key, current)
+    return current
+  }
+
+  async tryDeletePrivateMessage(remoteJid, keyOrMsg) {
+    if (!this.sock || !remoteJid) return false
+    const key = keyOrMsg?.key ? keyOrMsg.key : keyOrMsg
+    if (!key?.id) return false
+    try {
+      await this.sock.sendMessage(remoteJid, { delete: key })
+      return true
+    } catch (e) {
+      logWarn(`[${this.number}] delete private message failed:`, e?.message || e)
+      return false
+    }
+  }
+
+  async applyPrivateProtectionAction(remoteJid, participantJid, msg, reason, settings = {}, options = {}) {
+    const action = this.normalizeProtectionAction(options.action || settings.antiAction)
+    const warnLimit = Math.max(1, Math.min(20, Number(settings.antiWarnCount || 3) || 3))
+    const senderJid = String(participantJid || remoteJid || '').trim()
+
+    await this.tryDeletePrivateMessage(remoteJid, msg)
+
+    if (options.silentDelete) return true
+
+    const warning = this.bumpPrivateWarning(senderJid)
+    let outcome = options.warningText
+      ? `⚠️ ${options.warningText}\nالتحذير: ${warning.count}/${warnLimit}`
+      : `⚠️ تم رصد مخالفة (${reason}) في الخاص.\nالتحذير: ${warning.count}/${warnLimit}`
+
+    if (action === 'delete' && !options.forceBlockAfterWarnings) {
+      outcome = `🗑 تم حذف الرسالة المخالفة (${reason}).`
+    } else if ((action === 'block' || action === 'remove' || options.forceBlockAfterWarnings) && warning.count >= warnLimit) {
+      if (typeof this.sock.updateBlockStatus === 'function' && senderJid) {
+        try {
+          await this.sock.updateBlockStatus(senderJid, 'block')
+          outcome = `⛔ تم حظر المرسل بسبب ${reason} بعد ${warnLimit} مخالفات.`
+        } catch (e) {
+          logWarn(`[${this.number}] private block failed:`, e?.message || e)
+        }
+      }
+    }
+
+    await this.sendReplyTo(remoteJid, outcome)
+    return true
+  }
+
   isLikelyAutomatedMessage(msg, text = '') {
     const raw = msg?.message && typeof msg.message === 'object' ? msg.message : {}
     const inner = unwrapMessageObject(raw)
@@ -1060,14 +1184,56 @@ class WaSession {
     if (!remoteJid || remoteJid.endsWith('@g.us') || remoteJid === STATUS_JID || msg?.key?.fromMe) return false
     const record = db.getNumber(this.userId, this.number)
     const settings = record?.settings || {}
-    if (settings.antiPrivateMessages !== 'on' || !this.sock || !msg?.key?.id) return false
+    const participantJid = this.extractSenderJid(msg) || remoteJid
+    const text = extractTextFromMessage(msg)
 
-    try {
-      await this.sock.sendMessage(remoteJid, { delete: msg.key })
-    } catch (e) {
-      logWarn(`[${this.number}] تعذر حذف الرسالة الخاصة:`, e?.message || e)
+    if (settings.antiPrivateMessages === 'on' && this.sock && msg?.key?.id) {
+      await this.tryDeletePrivateMessage(remoteJid, msg)
+      return true
     }
-    return true
+
+    if (settings.antiViewOnce === 'on' && hasViewOncePayload(msg?.message)) {
+      return this.applyPrivateProtectionAction(remoteJid, participantJid, msg, 'رسائل العرض مرة واحدة', settings, {
+        warningText: 'ممنوع إرسال رسائل العرض مرة واحدة إلى هذا الرقم'
+      })
+    }
+
+    if (settings.antiBug === 'on' && isLikelyBugPayload(msg, text)) {
+      return this.applyPrivateProtectionAction(remoteJid, participantJid, msg, 'رسائل البق', settings, {
+        warningText: 'تم حذف رسالة غير آمنة في الخاص'
+      })
+    }
+
+    if (settings.antiLink === 'on' && containsBlockedLink(text, parseListSetting(settings.antiLinkList))) {
+      return this.applyPrivateProtectionAction(remoteJid, participantJid, msg, 'إرسال الروابط', { ...settings, antiAction: 'block' }, {
+        forceBlockAfterWarnings: true,
+        warningText: 'ممنوع إرسال الروابط إلى هذا الرقم'
+      })
+    }
+
+    if (settings.antiBad === 'on' && containsBlockedWord(text, parseListSetting(settings.antiBadWords))) {
+      return this.applyPrivateProtectionAction(remoteJid, participantJid, msg, 'الكلمات الممنوعة', settings, {
+        warningText: 'تم حذف رسالة تحتوي على كلمات ممنوعة'
+      })
+    }
+
+    if (settings.antiMention === 'on' && extractMentionedJids(msg).length) {
+      return this.applyPrivateProtectionAction(remoteJid, participantJid, msg, 'المنشن', settings, {
+        warningText: 'المنشن غير مسموح في الخاص لهذا الرقم'
+      })
+    }
+
+    if (settings.antiBot === 'on' && this.isLikelyAutomatedMessage(msg, text)) {
+      return this.applyPrivateProtectionAction(remoteJid, participantJid, msg, 'رسائل البوتات', settings, {
+        warningText: 'الرسائل الآلية غير مسموحة لهذا الرقم'
+      })
+    }
+
+    if (settings.autoReply === 'on') {
+      await this.handlePrivateAutoReply(msg, remoteJid, settings)
+    }
+
+    return false
   }
 
   async handleGroupAddProtection(update) {
@@ -1150,6 +1316,37 @@ class WaSession {
     }
 
     return false
+  }
+
+  async handlePrivateAutoReply(msg, remoteJid, settings = {}) {
+    if (!this.sock || !remoteJid || msg?.key?.fromMe) return false
+    const text = extractTextFromMessage(msg)
+    const replyText = buildAutoReplyText(text, settings)
+    if (!replyText) return false
+
+    try {
+      if (settings.autoRead === 'on' && typeof this.sock.readMessages === 'function' && msg?.key?.id) {
+        await this.sock.readMessages([msg.key]).catch(() => {})
+      }
+
+      if (typeof this.sock.sendPresenceUpdate === 'function') {
+        const presence = settings.autoRecording === 'on' ? 'recording' : settings.autoTyping === 'on' ? 'composing' : null
+        if (presence) {
+          await this.sock.sendPresenceUpdate(presence, remoteJid).catch(() => {})
+          await sleep(350)
+        }
+      }
+
+      await this.sendReplyTo(remoteJid, replyText)
+
+      if (typeof this.sock.sendPresenceUpdate === 'function' && (settings.autoRecording === 'on' || settings.autoTyping === 'on')) {
+        this.sock.sendPresenceUpdate('paused', remoteJid).catch(() => {})
+      }
+      return true
+    } catch (e) {
+      logWarn(`[${this.number}] auto reply failed:`, e?.message || e)
+      return false
+    }
   }
 
   async handleIncomingCall(callEvents) {
@@ -1834,7 +2031,7 @@ class WaSession {
     }
 
     if (cmd === 'help' || cmd === 'مساعدة' || cmd === 'مساعده' || cmd === 'h') {
-      await reply(this.buildOwnerHelp())
+      await this.sendOwnerHelpMenu(replyTarget)
       return true
     }
 
@@ -1886,6 +2083,7 @@ class WaSession {
         `autoStatusReact: ${s.autoStatusReact || 'on'}`,
         `autoRead: ${s.autoRead || 'off'}`,
         `autoReact: ${s.autoReact || 'off'}`,
+        `autoReply: ${s.autoReply || 'off'}`,
         `antiCall: ${s.antiCall || 'off'}`,
         `language: ${s.language || 'arabic'}`,
         ``,
@@ -1962,6 +2160,18 @@ class WaSession {
       }
       db.setPhoneSetting(this.userId, this.number, 'antiPrivateMessages', normalized)
       await reply(`✅ تم ${normalized === 'on' ? 'تفعيل' : 'إيقاف'} حذف الرسائل الخاصة الواردة تلقائياً بدون تحذير.`)
+      return true
+    }
+
+    if (['autoreply', 'الردالالي', 'الرد_الالي', 'ردالي', 'رد_الي'].includes(cmd)) {
+      const normalized = normalizeOnOffValue(rest)
+      if (!normalized) {
+        await reply(`❌ الاستخدام: ${prefix}الرد_الالي تشغيل|ايقاف`)
+        return true
+      }
+      db.setPhoneSetting(this.userId, this.number, 'autoReply', normalized)
+      await reply(`✅ تم ${normalized === 'on' ? 'تفعيل' : 'إيقاف'} الرد الآلي على الرسائل الخاصة.
+يمكنك إضافة ردود مخصصة من الإعداد customAutoReplies بصيغة: كلمة=الرد`)
       return true
     }
 
@@ -2258,6 +2468,59 @@ class WaSession {
     return false
   }
 
+  async sendOwnerHelpMenu(jid) {
+    if (!this.sock || !jid) return false
+    const prefix = db.getPhoneSettings(this.userId, this.number)?.prefix || '.'
+    const title = '🧠 كيبورد المطور - أوامر الرقم المربوط'
+    const text = `اختر أي أمر من القائمة ليتم إدراجه لك بشكل مرتب على الرقم ${this.number}.`
+    const sections = [
+      {
+        title: '⚙️ أوامر أساسية',
+        rows: [
+          { title: `${prefix}help`, rowId: `${prefix}help`, description: 'عرض كيبورد الأوامر مرة أخرى' },
+          { title: `${prefix}settings`, rowId: `${prefix}settings`, description: 'عرض إعدادات الرقم الحالية' },
+          { title: `${prefix}emoji ❤️`, rowId: `${prefix}emoji ❤️`, description: 'تغيير إيموجي التفاعل' },
+          { title: `${prefix}mode private`, rowId: `${prefix}mode private`, description: 'تحويل وضع الرقم إلى خاص' },
+          { title: `${prefix}prefix !`, rowId: `${prefix}prefix !`, description: 'تغيير بادئة الأوامر' },
+        ],
+      },
+      {
+        title: '🛡 أوامر الحماية والرد',
+        rows: [
+          { title: `${prefix}protect on`, rowId: `${prefix}protect on`, description: 'تشغيل الحماية الأساسية بالكامل' },
+          { title: `${prefix}antilink on`, rowId: `${prefix}antilink on`, description: 'منع الروابط في الخاص والمجموعات' },
+          { title: `${prefix}منع_الخاص تشغيل`, rowId: `${prefix}منع_الخاص تشغيل`, description: 'حذف أي رسالة واردة في الخاص' },
+          { title: `${prefix}الرد_الالي تشغيل`, rowId: `${prefix}الرد_الالي تشغيل`, description: 'تشغيل الرد الآلي على الرسائل الخاصة' },
+          { title: `${prefix}حماية_الكل`, rowId: `${prefix}حماية_الكل`, description: 'عرض أوامر الحماية السريعة' },
+        ],
+      },
+      {
+        title: '📥 أدوات وروابط',
+        rows: [
+          { title: `${prefix}tt رابط`, rowId: `${prefix}tt رابط`, description: 'تحميل فيديو تيك توك' },
+          { title: `${prefix}ig رابط`, rowId: `${prefix}ig رابط`, description: 'تحميل فيديو إنستغرام' },
+          { title: `${prefix}pair 9677XXXXXXXX`, rowId: `${prefix}pair 9677XXXXXXXX`, description: 'إصدار كود اقتران لرقم جديد' },
+          { title: `${prefix}panel`, rowId: `${prefix}panel`, description: 'رابط لوحة إعدادات الرقم' },
+          { title: `${prefix}password 1234`, rowId: `${prefix}password 1234`, description: 'تغيير كلمة مرور اللوحة' },
+        ],
+      },
+    ]
+
+    try {
+      await this.sock.sendMessage(jid, {
+        title,
+        text,
+        footer: `الرقم: ${this.number}`,
+        buttonText: 'فتح قائمة الأوامر',
+        sections,
+      })
+      return true
+    } catch (e) {
+      logWarn(`[${this.number}] help menu failed:`, e?.message || e)
+      return this.sendReplyTo(jid, this.buildOwnerHelp())
+    }
+  }
+
   buildOwnerHelp() {
     const prefix = db.getPhoneSettings(this.userId, this.number)?.prefix || '.'
     return [
@@ -2268,25 +2531,25 @@ class WaSession {
       `${prefix}الوضع خاص|عام - تغيير وضع الرقم`,
       `${prefix}بادئة ! - تغيير بادئة الأوامر`,
       `${prefix}ضبط <الإعداد> <القيمة> - تحديث إعداد`,
-      `${prefix}تحميل_تيك <رابط> - تحميل فيديو تيك توك`,
-      `${prefix}تحميل_انستا <رابط> - تحميل فيديو إنستغرام`,
+      `${prefix}tt <رابط> - تحميل فيديو تيك توك`,
+      `${prefix}ig <رابط> - تحميل فيديو إنستغرام`,
       `${prefix}حماية تشغيل|ايقاف - تشغيل أو إيقاف حماية المجموعات`,
       `${prefix}حماية_الكل - عرض أوامر الحماية`,
-      `${prefix}منع_الروابط تشغيل|ايقاف - حذف الروابط والتحذير ثم حظر المرسل بعد 3 تحذيرات`,
-      `${prefix}منع_الاضافة تشغيل|ايقاف - مغادرة أي مجموعة يضاف إليها الرقم وإبلاغ من أضافه`,
-      `${prefix}منع_الخاص تشغيل|ايقاف - حذف الرسائل الخاصة الواردة بلا تحذير`,
+      `${prefix}منع_الروابط تشغيل|ايقاف - حذف الروابط في الخاص والمجموعات`,
+      `${prefix}منع_الاضافة تشغيل|ايقاف - مغادرة أي مجموعة يضاف إليها الرقم`,
+      `${prefix}منع_الخاص تشغيل|ايقاف - حذف الرسائل الخاصة الواردة`,
+      `${prefix}الرد_الالي تشغيل|ايقاف - تشغيل أو إيقاف الرد الآلي`,
       `${prefix}منع_الكلمات تشغيل|ايقاف - منع الكلمات المحددة`,
       `${prefix}منع_المنشن تشغيل|ايقاف - منع المنشن`,
       `${prefix}منع_الاتصال تشغيل|ايقاف - رفض الاتصالات`,
       `${prefix}اجراء_الحماية تحذير|حذف|طرد|حظر`,
       `${prefix}عدد_التحذيرات 3 - تحديد عدد التحذيرات`,
-      `${prefix}حالة_الحماية - عرض حالة الحماية`,
       `${prefix}ربط 9677XXX - إصدار كود اقتران`,
       `${prefix}كلمة_السر <الجديدة> - تغيير كلمة مرور لوحة الإعدادات`,
       `${prefix}لوحة - رابط لوحة إعدادات الرقم`,
       '',
       '🔑 هذه الأوامر تعمل من رسالة الرقم نفسه فقط.',
-      'ℹ️ لا يمكن لواتساب إلغاء الإضافة قبل وقوعها؛ عند تفعيل منع الإضافة يغادر الرقم المجموعة فوراً ويرسل تنبيهاً لمن أضافه.',
+      'ℹ️ عند كتابة .help سيتم إرسال كيبورد مطور مرتب، وإذا لم يدعم جهازك القائمة التفاعلية سيظهر هذا الدليل النصي تلقائياً.',
       `${config.WEBSITE_URL || ''}/panel/${this.number}`.replace(/\/+$/, ''),
     ].join('\n')
   }
@@ -2337,7 +2600,12 @@ function extractTextFromMessage(msg) {
     raw?.videoMessage?.caption,
     raw?.documentMessage?.caption,
     raw?.buttonsResponseMessage?.selectedDisplayText,
+    raw?.buttonsResponseMessage?.selectedButtonId,
+    raw?.templateButtonReplyMessage?.selectedDisplayText,
+    raw?.templateButtonReplyMessage?.selectedId,
     raw?.listResponseMessage?.title,
+    raw?.listResponseMessage?.singleSelectReply?.selectedRowId,
+    raw?.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson,
     raw?.reactionMessage?.text,
     m?.conversation,
     m?.extendedTextMessage?.text,
@@ -2345,7 +2613,12 @@ function extractTextFromMessage(msg) {
     m?.videoMessage?.caption,
     m?.documentMessage?.caption,
     m?.buttonsResponseMessage?.selectedDisplayText,
+    m?.buttonsResponseMessage?.selectedButtonId,
+    m?.templateButtonReplyMessage?.selectedDisplayText,
+    m?.templateButtonReplyMessage?.selectedId,
     m?.listResponseMessage?.title,
+    m?.listResponseMessage?.singleSelectReply?.selectedRowId,
+    m?.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson,
     m?.reactionMessage?.text,
   ]
   for (const c of candidates) {
