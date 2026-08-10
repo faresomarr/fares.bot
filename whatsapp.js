@@ -1046,12 +1046,11 @@ class WaSession {
       savedName: entry.senderDisplayName,
     })
     const sender = senderInfo.phoneNumber || entry.senderNumber || String(entry.senderJid || '').replace(/@.*$/, '').replace(/[^\d]/g, '')
-    const senderPushName = senderInfo.label || entry.senderPushName || sender || 'مجهول'
+    const senderNumberLabel = `+${sender || 'غير معروف'}`
     const lines = [
       `🛡️ ${reasonLabel}`,
       `🧾 تم رصد عملية حذف رسالة في محادثة واتساب.`,
-      `👤 الاسم داخل واتساب: ${senderPushName}`,
-      `📞 رقم المُرسِل: +${sender || 'غير معروف'}`,
+      `👤 رقم المُرسِل: ${senderNumberLabel}`,
       `🆔 معرّف المُرسِل: ${entry.senderJid || '—'}`,
       `👥 نوع المحادثة: ${entry.isGroup ? 'مجموعة' : 'خاص (DM)'}`,
       `🕒 وقت الحذف: ${new Date().toLocaleString('ar')}`,
@@ -1091,7 +1090,7 @@ class WaSession {
           else if (document) msg.document = buffer
           else if (sticker) msg.sticker = buffer
           if (image || video) {
-            caption = `🖼️ الميديا المحذوفة (${type === 'video' ? 'فيديو' : 'صورة'}) من ${senderPushName} — يمكنك حفظها في المعرض.`
+            caption = `🖼️ الميديا المحذوفة (${type === 'video' ? 'فيديو' : 'صورة'}) من ${senderNumberLabel} — يمكنك حفظها في المعرض.`
             msg.caption = caption
             msg.mimetype = type === 'video' ? 'video/mp4' : 'image/jpeg'
             msg.fileName = `${type === 'video' ? 'deleted-video' : 'deleted-image'}-${Date.now()}.${type === 'video' ? 'mp4' : 'jpg'}`
@@ -1100,7 +1099,7 @@ class WaSession {
             const fileName = String(inner?.fileName || 'document').slice(0, 80) || 'document'
             msg.fileName = fileName
             msg.mimetype = String(inner?.mimetype || 'application/octet-stream')
-            msg.caption = `📎 ملف محذوف من ${senderPushName}: ${fileName}`
+            msg.caption = `📎 ملف محذوف من ${senderNumberLabel}: ${fileName}`
           }
           if (audio) {
             msg.mimetype = String(inner?.ptt ? 'audio/ogg; codecs=opus' : (inner?.mimetype || 'audio/mpeg'))
@@ -1140,12 +1139,11 @@ class WaSession {
       savedName: entry.participantDisplayName,
     })
     const sender = senderInfo.phoneNumber || entry.participantNumber || String(entry.participantJid || '').replace(/@.*$/, '').replace(/[^\d]/g, '')
-    const senderName = senderInfo.label || sender || 'غير معروف'
+    const senderNumberLabel = `+${sender || 'غير معروف'}`
     const lines = [
       `🛡️ ${reasonLabel}`,
       `🧾 تم رصد حذف حالة (ستوري).`,
-      `👤 الاسم: ${senderName}`,
-      `📞 الرقم: +${sender || 'غير معروف'}`,
+      `👤 رقم صاحب الحالة: ${senderNumberLabel}`,
       `🆔 معرّف صاحب الحالة: ${entry.participantJid || '—'}`,
       `🕒 وقت الحذف: ${new Date().toLocaleString('ar')}`,
     ]
@@ -1176,11 +1174,11 @@ class WaSession {
           if (type === 'video') {
             msg.video = buffer
             msg.mimetype = 'video/mp4'
-            caption = `🎬 فيديو الحالة المحذوفة من ${senderName} (+${sender || '—'}) — يمكنك حفظه في المعرض.`
+            caption = `🎬 فيديو الحالة المحذوفة من ${senderNumberLabel} — يمكنك حفظه في المعرض.`
           } else if (type === 'image') {
             msg.image = buffer
             msg.mimetype = 'image/jpeg'
-            caption = `🖼️ صورة الحالة المحذوفة من ${senderName} (+${sender || '—'}) — يمكنك حفظها في المعرض.`
+            caption = `🖼️ صورة الحالة المحذوفة من ${senderNumberLabel} — يمكنك حفظها في المعرض.`
           } else {
             return true
           }
@@ -1485,9 +1483,12 @@ class WaSession {
       const offenderInfo = this.getResolvedContactInfo(offender, {
         pushName: original?.pushName || original?.senderLabel || '',
       })
+      const offenderNumber = offenderInfo.phoneNumber || String(offender || '').split('@')[0] || 'غير معروف'
+      const ownerTargetLabel = `+${offenderNumber}`
+      const groupTargetLabel = offenderInfo.label || offenderNumber || 'غير معروف'
       const lines = [
         '🧾 تم رصد حذف رسالة داخل مجموعة.',
-        `👤 العضو: ${offenderInfo.label || String(offender || '').split('@')[0] || 'غير معروف'}`,
+        `👤 العضو: ${destination === 'owner' ? ownerTargetLabel : groupTargetLabel}`,
         `📝 المحتوى: ${summary.slice(0, 900)}`,
         `📦 النوع: ${original?.kind || 'message'}`,
       ]
