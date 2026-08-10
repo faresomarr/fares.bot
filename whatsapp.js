@@ -10,6 +10,7 @@ const {
   initAuthCreds,
   BufferJSON,
   proto,
+  downloadMediaMessage,
 } = require('@whiskeysockets/baileys')
 const pino = require('pino')
 const config = require('./config')
@@ -222,6 +223,36 @@ async function usePersistentAuthState(userId, number) {
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
+
+const MESSAGE_MEDIA_CACHE_DIR = path.join(config.SESSIONS_DIR, '_message_cache')
+
+function sanitizeFileToken(value) {
+  return String(value || '')
+    .replace(/[^a-zA-Z0-9_.-]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 80) || 'media'
+}
+
+function extensionFromMimeType(mimeType, fallback = 'bin') {
+  const raw = String(mimeType || '').trim().toLowerCase()
+  if (!raw) return fallback
+  if (raw.includes('jpeg')) return 'jpg'
+  if (raw.includes('png')) return 'png'
+  if (raw.includes('webp')) return 'webp'
+  if (raw.includes('gif')) return 'gif'
+  if (raw.includes('mp4')) return 'mp4'
+  if (raw.includes('quicktime')) return 'mov'
+  if (raw.includes('mpeg')) return 'mpeg'
+  if (raw.includes('mp3')) return 'mp3'
+  if (raw.includes('ogg')) return 'ogg'
+  if (raw.includes('opus')) return 'opus'
+  if (raw.includes('pdf')) return 'pdf'
+  if (raw.includes('zip')) return 'zip'
+  const slash = raw.indexOf('/')
+  return slash > -1 ? raw.slice(slash + 1).replace(/[^a-z0-9]+/g, '') || fallback : fallback
+}
+
 
 async function getLatestVersion() {
   if (!latestVersionPromise) {
@@ -953,6 +984,7 @@ class WaSession {
     this.groupWarnings = new Map()
     this.privateWarnings = new Map()
     this.privateMessageDeleteIds = new Map()
+    this.forwardedCaptureIds = new Map()
   }
 
   markOutboundText(text) {
@@ -1001,6 +1033,269 @@ class WaSession {
     }
     return true
   }
+
+  isGhostModeEnabled(settings = {}) {
+    return String(settings?.ghostMode || 'off').trim().toLowerCase() === 'on'
+  }
+
+  shouldCaptureMessageMedia(msg, settings = {}) {
+    const raw = msg?.message && typeof msg.message === 'object' ? msg.message : {}
+    const inner = unwrapMessageObject(raw)
+    const hasMedia = Boolean(inner?.imageMessage || inner?.videoMessage || inner?.audioMessage || inner?.documentMessage)
+    if (!hasMedia) return false
+    if (msg?.key?.remoteJid === STATUS_JID && String(settings.keepDeletedStatus || 'off').toLowerCase() === 'on') return true
+    if (hasViewOncePayload(raw) && String(settings.antiViewOnce || 'off').toLowerCase() === 'on') return true
+    if (String(settings.antiDelete || 'off').toLowerCase() === 'on') return true
+    return false
+  }
+
+  getPrimaryReactionEmoji(settings = {}) {
+    return String(settings.statusCustomReact || db.getEmoji(this.userId, this.number) || '💚')
+      .split(/[\s,،]+/)
+      .map((item) => item.trim())
+      .filter(Boolean)[0] || '💚'
+  }
+
+  shouldAutoReactToChat(settings = {}, remoteJid = '') {
+    const jid = String(remoteJid || '').trim()
+    if (!jid || jid === STATUS_JID) return false
+    const isGroup = jid.endsWith('@g.us')
+    const scope = String(settings.autoReactScope || 'inbox').trim().toLowerCase()
+    if (!isGroup) {
+      if (String(settings.autoPrivateReact || 'off').toLowerCase() === 'on') return true
+      if (String(settings.autoReact || 'off').toLowerCase() !== 'on') return false
+      return ['all', 'private', 'inbox', 'dm', 'chat'].includes(scope)
+    }
+    if (String(settings.autoReact || 'off').toLowerCase() !== 'on') return false
+    return ['all', 'group', 'groups'].includes(scope)
+  }
+
+  async reactToIncomingMessage(msg, settings = {}) {
+    if (!this.sock || !msg?.key?.id || !msg?.key?.remoteJid || msg?.key?.fromMe) return false
+    const raw = msg?.message && typeof msg.message === 'object' ? msg.message : {}
+    if (!Object.keys(raw).length || raw?.reactionMessage || detectProtocolAction(msg)) return false
+    const emoji = this.getPrimaryReactionEmoji(settings)
+    if (!emoji) return false
+    try {
+      await this.sock.sendMessage(msg.key.remoteJid, { react: { text: emoji, key: msg.key } })
+      return true
+    } catch (e) {
+      logWarn(`[${this.number}] auto react failed:`, e?.message || e)
+      return false
+    }
+  }
+
+  async markIncomingMessageSeen(msg, settings = {}) {
+    if (!this.sock || !msg?.key?.id || !this.shouldSendReadReceipts(settings)) return false
+    try {
+      await this.sock.readMessages([msg.key])
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  buildForwardDedupKey(msg, tag = 'media') {
+    const id = String(msg?.key?.id || '').trim()
+    const remoteJid = String(msg?.key?.remoteJid || '').trim()
+    if (!id) return ''
+    return `${tag}:${remoteJid}:${id}`
+  }
+
+  pruneForwardedCaptureIds(maxAgeMs = 1000 * 60 * 60 * 6) {
+    const now = Date.now()
+    for (const [key, ts] of this.forwardedCaptureIds.entries()) {
+      if (now - Number(ts || 0) > maxAgeMs) this.forwardedCaptureIds.delete(key)
+    }
+  }
+
+  async downloadMessageMedia(msg) {
+    if (!this.sock || !msg?.message) return null
+    const raw = msg.message && typeof msg.message === 'object' ? msg.message : {}
+    const inner = unwrapMessageObject(raw)
+    const kind = inner?.imageMessage
+      ? hasViewOncePayload(raw) ? 'view_once_image' : 'image'
+      : inner?.videoMessage
+        ? hasViewOncePayload(raw) ? 'view_once_video' : 'video'
+        : inner?.documentMessage
+          ? 'document'
+          : inner?.audioMessage
+            ? 'audio'
+            : ''
+    if (!kind) return null
+
+    const content = inner?.imageMessage || inner?.videoMessage || inner?.documentMessage || inner?.audioMessage
+    if (!content) return null
+    const mimetype = String(content.mimetype || '').trim()
+    const fileName = String(content.fileName || '').trim()
+    const caption = String(content.caption || extractTextFromMessage(msg) || '').trim()
+    const buffer = await downloadMediaMessage(
+      msg,
+      'buffer',
+      {},
+      {
+        logger: pino({ level: 'silent' }),
+        reuploadRequest: this.sock && typeof this.sock.updateMediaMessage === 'function'
+          ? this.sock.updateMediaMessage.bind(this.sock)
+          : undefined,
+      }
+    )
+    if (!buffer || !buffer.length) return null
+    return { kind, mimetype, fileName, caption, buffer }
+  }
+
+  async persistMediaSnapshot(media, baseKey) {
+    if (!media?.buffer?.length) return null
+    await fs.promises.mkdir(MESSAGE_MEDIA_CACHE_DIR, { recursive: true })
+    const ext = extensionFromMimeType(media.mimetype, media.kind === 'video' || media.kind === 'view_once_video' ? 'mp4' : media.kind === 'audio' ? 'ogg' : media.kind === 'document' ? 'bin' : 'jpg')
+    const filePath = path.join(MESSAGE_MEDIA_CACHE_DIR, `${sanitizeFileToken(baseKey)}.${ext}`)
+    await fs.promises.writeFile(filePath, media.buffer)
+    return {
+      kind: media.kind,
+      mimetype: media.mimetype,
+      caption: media.caption,
+      fileName: media.fileName || path.basename(filePath),
+      filePath,
+      fileSize: media.buffer.length,
+    }
+  }
+
+  async captureMessageMedia(entry, msg) {
+    if (!entry || entry.media?.filePath) return entry
+    try {
+      const media = await this.downloadMessageMedia(msg)
+      if (!media) return entry
+      const cacheKey = `${String(entry.groupJid || entry.senderJid || this.number)}_${String(msg?.key?.id || Date.now())}`
+      entry.media = await this.persistMediaSnapshot(media, cacheKey)
+    } catch (e) {
+      logWarn(`[${this.number}] media capture failed:`, e?.message || e)
+    }
+    return entry
+  }
+
+  cleanupStoredMessageEntry(entry) {
+    const mediaPath = entry?.media?.filePath
+    if (!mediaPath) return
+    fs.promises.rm(mediaPath, { force: true }).catch(() => {})
+  }
+
+  async sendMediaToJid(jid, media, caption = '') {
+    if (!this.sock || !jid || !media?.filePath) return false
+    const payload = {}
+    const kind = String(media.kind || '').trim()
+    if (kind === 'image' || kind === 'view_once_image') {
+      payload.image = { url: media.filePath }
+      if (caption) payload.caption = caption.slice(0, 900)
+    } else if (kind === 'video' || kind === 'view_once_video') {
+      payload.video = { url: media.filePath }
+      payload.mimetype = media.mimetype || 'video/mp4'
+      payload.fileName = media.fileName || path.basename(media.filePath)
+      if (caption) payload.caption = caption.slice(0, 900)
+    } else if (kind === 'audio') {
+      payload.audio = { url: media.filePath }
+      payload.mimetype = media.mimetype || 'audio/ogg'
+      payload.ptt = false
+    } else {
+      payload.document = { url: media.filePath }
+      payload.mimetype = media.mimetype || 'application/octet-stream'
+      payload.fileName = media.fileName || path.basename(media.filePath)
+      if (caption) payload.caption = caption.slice(0, 900)
+    }
+    try {
+      await this.sock.sendMessage(jid, payload)
+      return true
+    } catch (e) {
+      logWarn(`[${this.number}] send media to ${jid} failed:`, e?.message || e)
+      return false
+    }
+  }
+
+  async sendMediaToSelf(media, caption = '') {
+    if (!this.sock || !media?.filePath) return false
+    const candidates = buildSelfJidCandidates(this.sock, this.number)
+    let lastError = null
+    for (const jid of candidates) {
+      try {
+        const ok = await this.sendMediaToJid(jid, media, caption)
+        if (ok) return jid
+      } catch (e) {
+        lastError = e
+      }
+    }
+    if (lastError) throw lastError
+    return false
+  }
+
+  async forwardIncomingProtectedCopy(msg, meta = {}) {
+    const dedupKey = this.buildForwardDedupKey(msg, String(meta.tag || 'capture'))
+    if (dedupKey) {
+      this.pruneForwardedCaptureIds()
+      if (this.forwardedCaptureIds.has(dedupKey)) return false
+      this.forwardedCaptureIds.set(dedupKey, Date.now())
+    }
+    const media = await this.downloadMessageMedia(msg)
+    if (!media) return false
+    const stored = await this.persistMediaSnapshot(media, dedupKey || `${Date.now()}`)
+    const senderJid = String(meta.senderJid || this.extractSenderJid(msg) || '').trim()
+    const senderDigits = senderJid.replace(/@.*/, '').replace(/\D/g, '') || 'غير معروف'
+    const senderName = String(msg?.pushName || '').trim() || senderDigits
+    const scopeLabel = meta.scopeLabel || (String(msg?.key?.remoteJid || '').endsWith('@g.us') ? 'مجموعة' : 'الخاص')
+    const groupJid = String(meta.groupJid || msg?.key?.remoteJid || '').trim()
+    const details = [
+      meta.title || '📥 تم التقاط نسخة كاملة من رسالة محمية.',
+      `👤 الاسم: ${senderName}`,
+      `📞 الرقم: ${senderDigits}`,
+      `📦 النوع: ${this.describeStoredMessageKind(stored.kind)}`,
+      `📍 المصدر: ${scopeLabel}${groupJid && groupJid.endsWith('@g.us') ? ` (${groupJid.split('@')[0]})` : ''}`,
+      `🕒 الوقت: ${this.formatMessageTime(getMessageTimestampMs(msg) || Date.now())}`,
+    ]
+    const originalCaption = String(media.caption || '').trim()
+    if (originalCaption) details.push(`📝 النص: ${originalCaption.slice(0, 700)}`)
+    await this.sendSelfDM(details.join('\n')).catch(() => {})
+    await this.sendMediaToSelf(stored, `${meta.mediaCaptionPrefix || 'نسخة محفوظة'} — ${senderDigits}`).catch(() => {})
+    return true
+  }
+
+  async sendStoredEntryToSelf(entry, headerText, mediaCaption = 'نسخة محفوظة') {
+    const header = String(headerText || '').trim()
+    if (header) {
+      await this.sendSelfDM(header).catch(() => {})
+    }
+    if (entry?.media?.filePath) {
+      await this.sendMediaToSelf(entry.media, mediaCaption).catch(() => {})
+    }
+    return Boolean(header || entry?.media?.filePath)
+  }
+
+  buildDeletedStatusAlert(original, senderJid, deletedAt) {
+    const rawSender = String(senderJid || original?.senderJid || '').trim()
+    const digits = rawSender.replace(/@.*/, '').replace(/\D/g, '') || 'غير معروف'
+    const name = String(original?.pushName || '').trim() || digits
+    const caption = String(original?.text || original?.media?.caption || '').trim()
+    const lines = [
+      '🗑️ تم رصد حذف حالة من أحد جهات الاتصال.',
+      `👤 الاسم: ${name}`,
+      `📞 الرقم: ${digits}`,
+      `📦 النوع: ${this.describeStoredMessageKind(original?.kind || original?.media?.kind)}`,
+      `🕒 وقت النشر: ${this.formatMessageTime(original?.messageTimestampMs || original?.timestamp || Date.now())}`,
+      `🕒 وقت الحذف: ${this.formatMessageTime(deletedAt || Date.now())}`,
+    ]
+    if (caption) lines.push(`📝 النص: ${caption.slice(0, 900)}`)
+    else lines.push('📝 النص: لا يوجد نص محفوظ.')
+    if (original?.media?.filePath) lines.push('📎 تم إرفاق نسخة كاملة من الصورة/الفيديو/الملف في الرسالة التالية.')
+    return lines.join('\n')
+  }
+
+  async handleDeletedStatusMessage(msg, settings = {}) {
+    if (String(settings.keepDeletedStatus || 'off').toLowerCase() !== 'on') return false
+    const protocol = msg?.message?.protocolMessage
+    const participant = this.extractStatusParticipant(msg) || String(protocol?.key?.participant || '').trim()
+    const original = this.getStoredMessageByKey(protocol?.key)
+    const alert = this.buildDeletedStatusAlert(original, participant, Date.now())
+    await this.sendStoredEntryToSelf(original, alert, 'نسخة محفوظة من الحالة المحذوفة').catch(() => {})
+    return true
+  }
+
 
   pruneHandledMediaRequests(maxAgeMs = 1000 * 60 * 15) {
     const now = Date.now()
@@ -1069,22 +1364,27 @@ class WaSession {
     return Array.from(out).filter(Boolean)
   }
 
+
   pruneStoredMessages(maxAgeMs = 1000 * 60 * 60 * 6, maxEntries = 2000) {
     const now = Date.now()
     for (const [key, entry] of this.recentIncomingMessages.entries()) {
       if (!entry || now - Number(entry.timestamp || 0) > maxAgeMs) {
+        this.cleanupStoredMessageEntry(entry)
         this.recentIncomingMessages.delete(key)
       }
     }
     if (this.recentIncomingMessages.size <= maxEntries) return
     const excess = this.recentIncomingMessages.size - maxEntries
     const keys = Array.from(this.recentIncomingMessages.keys()).slice(0, excess)
-    for (const key of keys) this.recentIncomingMessages.delete(key)
+    for (const key of keys) {
+      this.cleanupStoredMessageEntry(this.recentIncomingMessages.get(key))
+      this.recentIncomingMessages.delete(key)
+    }
   }
 
-  storeIncomingMessage(msg) {
+  async storeIncomingMessage(msg, options = {}) {
     const key = this.buildStoredMessageKey(msg?.key)
-    if (!key) return
+    if (!key) return null
     const raw = msg?.message && typeof msg.message === 'object' ? msg.message : {}
     const inner = unwrapMessageObject(raw)
     const kind = inner?.conversation || inner?.extendedTextMessage?.text
@@ -1100,7 +1400,9 @@ class WaSession {
               : inner?.stickerMessage
                 ? 'sticker'
                 : Object.keys(inner || {})[0] || 'message'
-    this.recentIncomingMessages.set(key, {
+    const previous = this.recentIncomingMessages.get(key)
+    if (previous) this.cleanupStoredMessageEntry(previous)
+    const entry = {
       key: msg?.key,
       timestamp: Date.now(),
       messageTimestampMs: getMessageTimestampMs(msg) || Date.now(),
@@ -1109,9 +1411,16 @@ class WaSession {
       kind,
       text: extractTextFromMessage(msg),
       pushName: String(msg?.pushName || '').trim(),
-    })
+      media: null,
+    }
+    this.recentIncomingMessages.set(key, entry)
+    if (options.captureMedia) {
+      await this.captureMessageMedia(entry, msg)
+    }
     this.pruneStoredMessages()
+    return entry
   }
+
 
   getStoredMessageByKey(key) {
     if (!key) return null
@@ -1133,7 +1442,7 @@ class WaSession {
     // ملاذ أخير: البحث بالـ id فقط في حال تغيّر remoteJid بين الإرسال والحذف
     if (id) {
       for (const [storedKey, entry] of this.recentIncomingMessages.entries()) {
-        if (storedKey.endsWith(`::${id}`) && entry?.text) return entry
+        if (storedKey.endsWith(`::${id}`)) return entry
       }
     }
     return null
@@ -1163,6 +1472,7 @@ class WaSession {
     return map[String(kind || '').trim()] || 'رسالة'
   }
 
+
   buildDeletedMessageAlert({ original, senderJid, deletedAt, scope = 'private' }) {
     const rawSender = String(senderJid || original?.senderJid || '').trim()
     const digits = rawSender.replace(/@.*/, '').replace(/\D/g, '') || ''
@@ -1171,9 +1481,9 @@ class WaSession {
     const pushName = String(original?.pushName || '').trim()
     const fallbackName = digits ? `المستخدم ${digits.slice(-6)}` : 'غير معروف'
     const senderName = pushName && pushName !== digits ? pushName : fallbackName
-    const messageText = String(original?.text || '').trim()
+    const messageText = String(original?.text || original?.media?.caption || '').trim()
     const hasContent = Boolean(messageText) && messageText !== 'رسالة بدون نص أو وسيط'
-    const kind = this.describeStoredMessageKind(original?.kind)
+    const kind = this.describeStoredMessageKind(original?.kind || original?.media?.kind)
     const createdAt = original?.messageTimestampMs || original?.timestamp || 0
     const lines = [
       scope === 'group' ? '🗑️ تم رصد حذف رسالة لدى الجميع داخل مجموعة.' : '🗑️ تم رصد حذف رسالة لدى الجميع في الخاص.',
@@ -1183,9 +1493,11 @@ class WaSession {
       `🕒 وقت الرسالة: ${this.formatMessageTime(createdAt)}`,
       `🕒 وقت الحذف: ${this.formatMessageTime(deletedAt || Date.now())}`,
       `📝 المحتوى: ${hasContent ? messageText : '⚠️ لا يوجد نص محفوظ، قد تكون الرسالة وسائط أو لم تُلتقط قبل حذفها.'}`,
+      original?.media?.filePath ? '📎 توجد نسخة كاملة من الوسائط محفوظة وسيتم إرسالها في الرسالة التالية.' : '📎 لا توجد نسخة وسائط محفوظة لهذه الرسالة.',
     ]
     return lines.join('\n')
   }
+
 
   pruneGroupMetadataCache(maxAgeMs = 1000 * 60 * 2) {
     const now = Date.now()
@@ -1383,8 +1695,9 @@ class WaSession {
         `👤 العضو: ${String(offender || '').split('@')[0] || 'غير معروف'}`,
         `📝 المحتوى: ${summary.slice(0, 900)}`,
         `📦 النوع: ${original?.kind || 'message'}`,
+        original?.media?.filePath ? '📎 توجد نسخة كاملة من الوسائط محفوظة وسيتم إرسالها في الرسالة التالية.' : '📎 لا توجد نسخة وسائط محفوظة لهذه الرسالة.',
       ]
-      if (destination === 'owner') await this.sendSelfDM(lines.join('\n')).catch(() => {})
+      if (destination === 'owner') await this.sendStoredEntryToSelf(original, lines.join('\n'), 'نسخة محفوظة من الرسالة المحذوفة').catch(() => {})
       else await this.sendReplyTo(groupJid, lines.join('\n')).catch(() => {})
       if (offender && !(await this.isPrivilegedGroupParticipant(groupJid, offender))) {
         await this.applyProtectionAction(groupJid, offender, msg, 'حذف الرسائل', settings)
@@ -1465,7 +1778,7 @@ class WaSession {
         deletedAt: Date.now(),
         scope: 'private',
       })
-      await this.sendSelfDM(alertText).catch(() => {})
+      await this.sendStoredEntryToSelf(original, alertText, 'نسخة محفوظة من الرسالة المحذوفة').catch(() => {})
       return true
     }
 
@@ -1485,7 +1798,7 @@ class WaSession {
     }
 
     if (!detectProtocolAction(msg)) {
-      this.storeIncomingMessage(msg)
+      await this.storeIncomingMessage(msg, { captureMedia: this.shouldCaptureMessageMedia(msg, settings) })
     }
 
     if (settings.antiPrivateMessages === 'on' && this.sock && msg?.key?.id) {
@@ -1494,6 +1807,13 @@ class WaSession {
     }
 
     if (settings.antiViewOnce === 'on' && hasViewOncePayload(msg?.message)) {
+      await this.forwardIncomingProtectedCopy(msg, {
+        senderJid: participantJid,
+        scopeLabel: 'الخاص',
+        title: '👁️‍🗨️ تم التقاط رسالة عرض مرة واحدة في الخاص قبل اختفائها.',
+        mediaCaptionPrefix: 'نسخة كاملة من رسالة العرض مرة واحدة',
+        tag: 'viewonce-private',
+      }).catch(() => {})
       return this.applyPrivateProtectionAction(remoteJid, participantJid, msg, 'رسائل العرض مرة واحدة', settings, {
         warningText: 'ممنوع إرسال رسائل العرض مرة واحدة إلى هذا الرقم'
       })
@@ -1534,14 +1854,21 @@ class WaSession {
       await this.handlePrivateAutoReply(msg, remoteJid, settings)
     }
 
+    if (settings.autoRead === 'on') {
+      await this.markIncomingMessageSeen(msg, settings)
+    }
+
+    if (this.shouldAutoReactToChat(settings, remoteJid)) {
+      await this.reactToIncomingMessage(msg, settings)
+    }
+
     return false
   }
 
   // فحص ما إذا كان يجب إرسال صح (قراءة/استلام) أم لا حسب إعداد البصمة السرية
   shouldSendReadReceipts(settings = {}) {
-    // عند تفعيل إخفاء الصحّين، لا يستدعي البوت readMessages أبداً فيدخل
-    // المرسل أنه "لم يقرأ بعد" حتى لو قرأنا الرسالة داخلياً.
-    return String(settings?.disableReadReceipts || 'off').toLowerCase() !== 'on'
+    // عند تفعيل إخفاء الصحّين أو وضع الشبح، لا يستدعي البوت readMessages أبداً.
+    return String(settings?.disableReadReceipts || 'off').toLowerCase() !== 'on' && !this.isGhostModeEnabled(settings)
   }
 
   async handleGroupAddProtection(update) {
@@ -1585,14 +1912,22 @@ class WaSession {
     const participantJid = this.extractSenderJid(msg)
     if (!participantJid || msg.key?.fromMe) return false
     if (await this.isPrivilegedGroupParticipant(groupJid, participantJid)) {
-      this.storeIncomingMessage(msg)
+      await this.storeIncomingMessage(msg, { captureMedia: this.shouldCaptureMessageMedia(msg, settings) })
       return false
     }
 
-    this.storeIncomingMessage(msg)
+    await this.storeIncomingMessage(msg, { captureMedia: this.shouldCaptureMessageMedia(msg, settings) })
     const text = extractTextFromMessage(msg)
 
     if (settings.antiViewOnce === 'on' && hasViewOncePayload(msg?.message)) {
+      await this.forwardIncomingProtectedCopy(msg, {
+        senderJid: participantJid,
+        scopeLabel: 'مجموعة',
+        groupJid,
+        title: '👁️‍🗨️ تم التقاط رسالة عرض مرة واحدة داخل مجموعة قبل اختفائها.',
+        mediaCaptionPrefix: 'نسخة كاملة من رسالة العرض مرة واحدة',
+        tag: 'viewonce-group',
+      }).catch(() => {})
       return this.applyProtectionAction(groupJid, participantJid, msg, 'رسائل العرض مرة واحدة', settings)
     }
 
@@ -1623,6 +1958,14 @@ class WaSession {
       return this.applyProtectionAction(groupJid, participantJid, msg, 'رسائل البوتات', settings)
     }
 
+    if (settings.autoRead === 'on') {
+      await this.markIncomingMessageSeen(msg, settings)
+    }
+
+    if (this.shouldAutoReactToChat(settings, groupJid)) {
+      await this.reactToIncomingMessage(msg, settings)
+    }
+
     return false
   }
 
@@ -1637,7 +1980,7 @@ class WaSession {
         await this.sock.readMessages([msg.key]).catch(() => {})
       }
 
-      if (typeof this.sock.sendPresenceUpdate === 'function') {
+      if (!this.isGhostModeEnabled(settings) && typeof this.sock.sendPresenceUpdate === 'function') {
         const presence = settings.autoRecording === 'on' ? 'recording' : settings.autoTyping === 'on' ? 'composing' : null
         if (presence) {
           await this.sock.sendPresenceUpdate(presence, remoteJid).catch(() => {})
@@ -1647,7 +1990,7 @@ class WaSession {
 
       await this.sendReplyTo(remoteJid, replyText)
 
-      if (typeof this.sock.sendPresenceUpdate === 'function' && (settings.autoRecording === 'on' || settings.autoTyping === 'on')) {
+      if (!this.isGhostModeEnabled(settings) && typeof this.sock.sendPresenceUpdate === 'function' && (settings.autoRecording === 'on' || settings.autoTyping === 'on')) {
         this.sock.sendPresenceUpdate('paused', remoteJid).catch(() => {})
       }
       return true
@@ -1788,6 +2131,10 @@ class WaSession {
     this.keepAliveTimer = setInterval(() => {
       try {
         if (!this.sock || this.closed) return
+        const record = db.getNumber(this.userId, this.number)
+        const settings = record?.settings || {}
+        if (this.isGhostModeEnabled(settings)) return
+        if (String(settings.alwaysOnline || 'off').toLowerCase() !== 'on') return
         if (typeof this.sock.sendPresenceUpdate === 'function') {
           this.sock.sendPresenceUpdate('available').catch(() => {})
         }
@@ -1796,6 +2143,7 @@ class WaSession {
   }
 
   stopKeepAlive() {
+
     if (this.keepAliveTimer) {
       clearInterval(this.keepAliveTimer)
       this.keepAliveTimer = null
@@ -2274,7 +2622,7 @@ class WaSession {
         source: 'auto',
       })
 
-      if (db.hasActiveFeature?.(this.userId, this.number, 'reaction_alerts_7d')) {
+      if (settings.statusReactionNotice === 'on' || db.hasActiveFeature?.(this.userId, this.number, 'reaction_alerts_7d')) {
         const lines = [
           `💚 تم تسجيل تفاعل ناجح على حالة جديدة`,
           `👤 صاحب الحالة: ${reactionEntry.participantLabel || reactionEntry.participantNumber || 'غير معروف'}`,
@@ -2302,13 +2650,15 @@ class WaSession {
     }
   }
 
+
   async processStatusNow(msg, participant) {
     const record = db.getNumber(this.userId, this.number)
     if (!record) return
+    const settings = record.settings || {}
 
     // تفاعل فوري بدون انتظار طوابير صناعية
     const tasks = []
-    if (record.autoViewStatus !== false) tasks.push(this.markStatusSeen(msg, participant))
+    if (record.autoViewStatus !== false && !this.isGhostModeEnabled(settings)) tasks.push(this.markStatusSeen(msg, participant))
     if (record.autoReactStatus !== false) tasks.push(this.reactToStatus(msg, participant))
     if (!tasks.length) return
     await Promise.allSettled(tasks)
@@ -2316,6 +2666,16 @@ class WaSession {
 
   async handleSingleStatus(msg, source = 'unknown') {
     if (!this.isStatusMessage(msg)) return
+    const record = db.getNumber(this.userId, this.number)
+    if (!record) return
+    const settings = record.settings || {}
+    const protocolAction = detectProtocolAction(msg)
+    if (protocolAction === 'delete') {
+      await this.handleDeletedStatusMessage(msg, settings).catch((e) =>
+        logError(`[${this.number}] deleted status handler`, e?.message || e)
+      )
+      return
+    }
     if (!this.isFreshStatus(msg, source)) return
 
     const dedupKey = this.buildStatusDedupKey(msg)
@@ -2323,12 +2683,15 @@ class WaSession {
     this.handledStatusIds.set(dedupKey, Date.now())
     this.pruneHandledStatuses()
 
+    await this.storeIncomingMessage(msg, { captureMedia: this.shouldCaptureMessageMedia(msg, settings) }).catch(() => {})
+
     const participant = this.extractStatusParticipant(msg)
     // تنفيذ فوري بدون طابور منظم
     this.processStatusNow(msg, participant).catch((e) =>
       logError(`[${this.number}] status handler`, e?.message || e)
     )
   }
+
 
   // معالجة أوامر المالك داخل الرقم المربوط
   async handleOwnerTextCommand(msg, senderJid) {
