@@ -93,7 +93,7 @@
       menu: { label: 'صورة المنيو', type: 'text', ph: 'رابط صورة القائمة' },
       alive: { label: 'صورة alive', type: 'text', ph: 'رابط صورة alive' },
       owner: { label: 'صورة المالك', type: 'text', ph: 'رابط صورة المالك' },
-      statusCustomReact: { label: 'رموز تعبيرية للحالة (10 كحد أقصى)', type: 'text', ph: '❤️,🔥,👍' },
+      statusCustomReact: { label: 'رموز تعبيرية للحالة (10 كحد أقصى)', type: 'text', ph: '💚,🔥,👍' },
       antiBug: { label: 'مكافحة البق', type: 'select', options: ['on', 'off'] },
       antiBot: { label: 'مكافحة البوت', type: 'select', options: ['on', 'off'] },
       antiBotAction: { label: 'إجراء مكافحة البوت', type: 'text', ph: 'delete' },
@@ -313,6 +313,11 @@
       if (hero) hero.classList.toggle('active', active)
       const dot = qs('reactionDot')
       if (dot) dot.className = 'reaction-dot' + (active ? ' active' : '')
+      const heart = qs('reactionHeart')
+      if (heart) {
+        heart.className = 'reaction-heart' + (active ? ' active' : '')
+        heart.textContent = (STATE.reactions.latestReaction && STATE.reactions.latestReaction.emoji) || '💚'
+      }
       safeSet('reactionIndicatorText', active ? 'التفاعل ظاهر الآن باللون الأخضر' : 'لا يوجد تفاعل حديث')
       safeSet('reactionTotalCount', formatNumber(STATE.reactions.total || 0) + ' عملية')
 
@@ -359,7 +364,7 @@
     STATE.settings = data.settings || {}
     safeSet('panelHeaderNumber', (data.number || STATE.number))
     safeSet('panelStatusLabel', data.status || '—')
-    safeSet('panelEmojiLabel', data.emoji || '❤️')
+    safeSet('panelEmojiLabel', data.emoji || '💚')
     buildSettingsGrid(STATE.settings, STATE.fieldMeta)
   }
 
@@ -438,7 +443,7 @@
         return
       }
       STATE.settings = data.settings || STATE.settings
-      safeSet('panelEmojiLabel', STATE.settings.statusCustomReact || '❤️')
+      safeSet('panelEmojiLabel', STATE.settings.statusCustomReact || '💚')
       setStatus(status, '✅ تم حفظ الإعدادات بنجاح.', 'success')
     } catch (e) {
       setStatus(status, e.message || 'فشل الحفظ.', 'error')
