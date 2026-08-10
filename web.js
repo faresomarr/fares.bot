@@ -33,6 +33,125 @@ function createAdminMiddleware() {
   }
 }
 
+function stripMarkdown(text) {
+  return String(text || '')
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1')
+    .trim()
+}
+
+function buildBuiltinAiReply(prompt) {
+  const text = String(prompt || '').trim()
+  const normalized = text.toLowerCase()
+
+  const replies = []
+
+  if (/ربط|اقتران|pair|pairing|code|كود/.test(normalized)) {
+    replies.push(
+      'لربط رقم واتساب جديد: افتح بوت تيليجرام، اختر «ربط رقم جديد»، ثم أرسل الرقم بصيغته الدولية بدون + أو مسافات. بعد ذلك سيتم تجهيز كود الاقتران لك، ويمكنك أيضاً إدارة الرقم لاحقاً من بوابة المالك داخل الموقع.'
+    )
+  }
+
+  if (/بوابة|المالك|panel|portal|لوحة/.test(normalized)) {
+    replies.push(
+      'بوابة المالك هي صفحة خاصة بكل رقم مربوط. من خلالها تستطيع تسجيل الدخول بالرقم وكلمة المرور، تعديل الإعدادات، متابعة الرصيد اليومي، شراء المزايا بالعملات، رؤية سجل تفاعلات الحالات، وتغيير كلمة المرور.'
+    )
+  }
+
+  if (/عملة|عملات|coin|coins|يومي|مكافأة/.test(normalized)) {
+    replies.push(
+      `كل رقم مربوط يحصل على ${db.DAILY_COIN_AMOUNT} عملة مجانية كل 24 ساعة. بعد تسجيل الدخول إلى بوابة المالك ستجد زر طلب المكافأة اليومية، وسيظهر لك الرصيد الحالي وسجل العمليات والمزايا النشطة.`
+    )
+  }
+
+  if (/مزايا|متجر|vip|شراء|offer/.test(normalized)) {
+    replies.push(
+      'يوجد داخل المشروع متجر مزايا يعتمد على العملات، مثل توسيع سجل التفاعلات، تنبيهات التفاعل، وترقية VIP. عند الشراء تُفعّل الميزة مباشرة على الرقم المربوط نفسه ويظهر أثرها داخل البوابة.'
+    )
+  }
+
+  if (/تعليق|تعليقات|رد|المطور|admin/.test(normalized)) {
+    replies.push(
+      'الموقع يحتوي على نموذج تعليقات عام، كما توجد لوحة مطور خاصة للرد على التعليقات باستخدام رمز الإدارة. الردود تظهر مباشرة داخل الموقع للمستخدمين.'
+    )
+  }
+
+  if (/حالة|الحالات|ستور|status|reaction|تفاعل/.test(normalized)) {
+    replies.push(
+      'داخل البوابة يوجد مؤشر واضح لآخر تفاعل ناجح على الحالات مع سجل حديث للتفاعلات. وإذا كانت الميزة المناسبة مفعلة يمكن توسيع السجل أو إرسال تنبيهات مرتبطة بالتفاعل.'
+    )
+  }
+
+  if (/لغة|عربي|العربية|arabic/.test(normalized)) {
+    replies.push(
+      'تم تجهيز الواجهة لتكون عربية بالكامل من حيث العناوين، الأزرار، الشروحات، بوابة المالك، ولوحة الموقع. كما تم الحفاظ على الحقوق الأصلية للمشروع داخل التذييل والنصوص التعريفية.'
+    )
+  }
+
+  if (!replies.length) {
+    replies.push(
+      'أنا مساعد موقع Fares Bot. أستطيع مساعدتك في فهم ربط واتساب، بوابة المالك، العملات اليومية، الإعدادات، سجل التفاعلات، والتحديثات الجديدة في الموقع. إذا أردت، اكتب سؤالك بشكل مباشر مثل: كيف أربط رقم جديد؟ أو كيف أغير كلمة المرور؟'
+    )
+  }
+
+  return replies.join('\n\n')
+}
+
+async function resolveAiReply(prompt) {
+  const cleanPrompt = String(prompt || '').trim().slice(0, config.AI_CHAT_MAX_PROMPT_CHARS)
+  if (!cleanPrompt) {
+    throw new Error('empty_prompt')
+  }
+
+  if (!config.AI_CHAT_ENABLED) {
+    return 'المساعد الذكي غير مفعل حالياً في هذا الموقع.'
+  }
+
+  if (!config.AI_CHAT_ENDPOINT) {
+    return buildBuiltinAiReply(cleanPrompt)
+  }
+
+  const payload = {
+    prompt: cleanPrompt,
+    system: config.AI_CHAT_SYSTEM_PROMPT,
+    site: {
+      title: config.SITE_TITLE,
+      description: config.SITE_DESCRIPTION,
+      url: config.WEBSITE_URL,
+    },
+  }
+
+  const headers = { 'Content-Type': 'application/json' }
+  if (config.AI_CHAT_API_KEY) {
+    headers.Authorization = `Bearer ${config.AI_CHAT_API_KEY}`
+  }
+
+  const response = await fetch(config.AI_CHAT_ENDPOINT, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload),
+  })
+
+  if (!response.ok) {
+    throw new Error(`ai_http_${response.status}`)
+  }
+
+  const data = await response.json().catch(() => ({}))
+  const reply =
+    data.reply ||
+    data.message ||
+    data.answer ||
+    data.text ||
+    data.output ||
+    data.result ||
+    ''
+
+  return stripMarkdown(reply) || buildBuiltinAiReply(cleanPrompt)
+}
+
 function startWebServer({ getRuntimeStats }) {
   const app = express()
   const adminOnly = createAdminMiddleware()
@@ -61,8 +180,32 @@ function startWebServer({ getRuntimeStats }) {
         telegramBotUrl: config.TELEGRAM_BOT_URL,
         dailyCoinAmount: db.DAILY_COIN_AMOUNT,
         coinStore: db.COIN_STORE,
+        aiChatEnabled: config.AI_CHAT_ENABLED,
+        aiPageUrl: `${config.WEBSITE_URL.replace(/\/+$/, '')}/ai`,
       },
     })
+  })
+
+  app.post('/api/public/ai-chat', async (req, res) => {
+    try {
+      const prompt = String(req.body?.prompt || '').trim()
+      if (!prompt) {
+        return res.status(400).json({ ok: false, error: 'الرسالة مطلوبة.' })
+      }
+      if (prompt.length > config.AI_CHAT_MAX_PROMPT_CHARS) {
+        return res.status(400).json({ ok: false, error: 'الرسالة طويلة جداً.' })
+      }
+
+      const reply = await resolveAiReply(prompt)
+      res.json({ ok: true, reply })
+    } catch (e) {
+      const useFallback = String(e.message || '').startsWith('ai_http_')
+      if (useFallback) {
+        return res.json({ ok: true, reply: buildBuiltinAiReply(String(req.body?.prompt || '')) })
+      }
+      const error = e.message === 'empty_prompt' ? 'الرسالة مطلوبة.' : 'تعذر تجهيز الرد حالياً.'
+      res.status(400).json({ ok: false, error })
+    }
   })
 
   app.get('/api/public/stats', (req, res) => {
@@ -347,6 +490,10 @@ function startWebServer({ getRuntimeStats }) {
     } catch (e) {
       res.status(400).json({ ok: false, error: e.message || 'تعذر تحميل سجل التفاعلات.' })
     }
+  })
+
+  app.get('/ai', (req, res) => {
+    res.sendFile(path.join(publicDir, 'ai.html'))
   })
 
   app.get('/panel', (req, res) => {

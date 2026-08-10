@@ -98,4 +98,13 @@ module.exports = {
   WHATSAPP_CHANNEL_INVITE: process.env.WHATSAPP_CHANNEL_INVITE || '0029Vb8jjfWCRs1sVz0x1w3v',
 
   TELEGRAM_BOT_URL: process.env.TELEGRAM_BOT_URL || 'https://t.me/Faresw_bob',
+
+  AI_CHAT_ENABLED: parseBoolean(process.env.AI_CHAT_ENABLED, true),
+  AI_CHAT_PROVIDER: String(process.env.AI_CHAT_PROVIDER || 'builtin').trim().toLowerCase() || 'builtin',
+  AI_CHAT_ENDPOINT: String(process.env.AI_CHAT_ENDPOINT || '').trim(),
+  AI_CHAT_API_KEY: String(process.env.AI_CHAT_API_KEY || '').trim(),
+  AI_CHAT_SYSTEM_PROMPT:
+    String(process.env.AI_CHAT_SYSTEM_PROMPT || '').trim() ||
+    'أنت مساعد عربي داخل موقع Fares Bot. أجب بالعربية الفصحى الواضحة وبشكل مختصر ومفيد. ركز على شرح ربط واتساب، بوابة المالك، العملات اليومية، الإعدادات، والتواصل مع المطور. إذا كان السؤال خارج نطاق الموقع فأجب بلطف وبشكل عام دون ادعاء قدرات غير موجودة.',
+  AI_CHAT_MAX_PROMPT_CHARS: Math.max(20, parseNumber(process.env.AI_CHAT_MAX_PROMPT_CHARS, 1200)),
 }
