@@ -1,0 +1,37 @@
+{
+  "name": "SULA-MD",
+  "description": "SULA-MD Multidevice Whatsapp Bot",
+  "logo": "https://i.ibb.co/0R73PZb5/SulaMd.jpg",
+  "keywords": ["bot"],
+  "success_url": "/",
+
+  "env": {
+    "SESSION_ID": {
+      "description": "Put the session-id here.",
+      "required": true
+    },
+    "BUTTON": {
+      "description": "true or false",
+      "required": false
+    },
+    "AUTO_REACT": {
+      "description": "true or false",
+      "required": false
+    },
+    "DELETEMSGSENDTO": {
+      "description": "Your Delete Massage Send Number",
+      "required": false
+    },
+    "ALLWAYS_OFFLINE": {
+      "description": "true or false",
+      "required": false
+    } 
+},
+
+     "buildpacks": [
+        {
+            "url": "https://github.com/heroku/heroku-buildpack-nodejs.git"
+        }
+     ],
+  "stack": "heroku-24"
+}
