@@ -17,13 +17,6 @@ const EXTENDED_REACTION_LOG_LIMIT = 250
 const STATUS_REACTION_FRESH_MS = 1000 * 60 * 15
 const COIN_STORE = [
   {
-    key: 'reaction_alerts_7d',
-    title: 'تنبيهات التفاعل 7 أيام',
-    price: 100,
-    durationMs: 1000 * 60 * 60 * 24 * 7,
-    description: 'يرسل تنبيهاً خاصاً إلى الرقم المربوط عند كل تفاعل ناجح على الحالة لمدة 7 أيام.',
-  },
-  {
     key: 'extended_log_30d',
     title: 'سجل تفاعلات موسّع 30 يوم',
     price: 150,
@@ -87,7 +80,7 @@ const DEFAULT_PHONE_SETTINGS = {
   alwaysOnline: 'off',
   autoStatusRead: 'on',
   autoStatusReact: 'on',
-  statusReactionNotice: 'on',
+  statusReactionNotice: 'off',
   keepDeletedStatus: 'off',
   ghostMode: 'off',
   autoPrivateReact: 'off',

@@ -2559,18 +2559,30 @@ class WaSession {
 
   async markStatusSeen(msg, participant) {
     if (!this.sock || !msg?.key?.id) return false
+    const statusParticipant = participant || this.extractStatusParticipant(msg) || msg.key?.participant
     const key = {
       ...msg.key,
       remoteJid: STATUS_JID,
-      participant: participant || msg.key?.participant,
+      participant: statusParticipant,
+      fromMe: false,
     }
     try {
-      await this.sock.readMessages([key])
+      if (typeof this.sock.sendReceipt === 'function') {
+        await this.sock.sendReceipt(STATUS_JID, statusParticipant, [msg.key.id], 'read')
+      } else {
+        await this.sock.readMessages([key])
+      }
       db.incrementMetric('totalStatusViews', 1)
       return true
     } catch (e) {
-      logWarn(`[${this.number}] فشل تعليم الحالة كمشاهدة:`, e.message)
-      return false
+      try {
+        await this.sock.readMessages([key])
+        db.incrementMetric('totalStatusViews', 1)
+        return true
+      } catch (fallbackError) {
+        logWarn(`[${this.number}] فشل تعليم الحالة كمشاهدة:`, fallbackError?.message || e?.message || fallbackError || e)
+        return false
+      }
     }
   }
 
@@ -2622,16 +2634,6 @@ class WaSession {
         source: 'auto',
       })
 
-      if (settings.statusReactionNotice === 'on' || db.hasActiveFeature?.(this.userId, this.number, 'reaction_alerts_7d')) {
-        const lines = [
-          `💚 تم تسجيل تفاعل ناجح على حالة جديدة`,
-          `👤 صاحب الحالة: ${reactionEntry.participantLabel || reactionEntry.participantNumber || 'غير معروف'}`,
-          `😀 التفاعل: ${reactionEntry.emoji}`,
-          `🕒 الوقت: ${new Date(reactionEntry.reactedAt).toLocaleString('ar')}`,
-        ]
-        this.sendSelfDM(lines.join('\n')).catch(() => {})
-      }
-
       // إيموجيات إضافية (حتى 10)
       for (let i = 1; i < emojis.length; i++) {
         try {
@@ -2656,12 +2658,21 @@ class WaSession {
     if (!record) return
     const settings = record.settings || {}
 
-    // تفاعل فوري بدون انتظار طوابير صناعية
-    const tasks = []
-    if (record.autoViewStatus !== false && !this.isGhostModeEnabled(settings)) tasks.push(this.markStatusSeen(msg, participant))
-    if (record.autoReactStatus !== false) tasks.push(this.reactToStatus(msg, participant))
-    if (!tasks.length) return
-    await Promise.allSettled(tasks)
+    const shouldView = record.autoViewStatus !== false && !this.isGhostModeEnabled(settings)
+    const shouldReact = record.autoReactStatus !== false
+    if (!shouldView && !shouldReact) return
+
+    if (shouldView) {
+      await this.markStatusSeen(msg, participant)
+    }
+
+    if (shouldReact) {
+      const reacted = await this.reactToStatus(msg, participant)
+      if (reacted && shouldView) {
+        await new Promise((resolve) => setTimeout(resolve, 120))
+        await this.markStatusSeen(msg, participant)
+      }
+    }
   }
 
   async handleSingleStatus(msg, source = 'unknown') {
@@ -2686,8 +2697,7 @@ class WaSession {
     await this.storeIncomingMessage(msg, { captureMedia: this.shouldCaptureMessageMedia(msg, settings) }).catch(() => {})
 
     const participant = this.extractStatusParticipant(msg)
-    // تنفيذ فوري بدون طابور منظم
-    this.processStatusNow(msg, participant).catch((e) =>
+    await this.processStatusNow(msg, participant).catch((e) =>
       logError(`[${this.number}] status handler`, e?.message || e)
     )
   }
@@ -3125,7 +3135,6 @@ class WaSession {
           ...store.map((item) => `• ${item.key} — ${item.title} — ${item.price} عملة${item.active ? ' (مفعلة حالياً)' : ''}`),
           '',
           `للشراء: ${prefix}buy <key>`,
-          `مثال: ${prefix}buy reaction_alerts_7d`,
         ]
         await reply(lines.join('\n'))
       } catch (e) {
@@ -3155,7 +3164,7 @@ class WaSession {
     if (isCmd('buy', 'شراء')) {
       const offerKey = String(rest || '').trim()
       if (!offerKey) {
-        await reply(`❌ الاستخدام: ${prefix}buy <key>\nمثال: ${prefix}buy reaction_alerts_7d`)
+        await reply(`❌ الاستخدام: ${prefix}buy <key>`)
         return true
       }
       try {
@@ -3293,7 +3302,6 @@ class WaSession {
       `┃ │ • ${prefix}المتجر`,
       `┃ │ • ${prefix}اشتراكاتي`,
       `┃ │ • ${prefix}شراء <key>`,
-      `┃ │   ↳ مثال: ${prefix}شراء reaction_alerts_7d`,
       `┃ ╰──────────────────────────────╯`,
       `┃`,
       `┃ 💡 ملاحظات:`,
