@@ -421,7 +421,14 @@ img { max-width: 100%; display: block; }
 /* متجر المزايا */
 .wallet-grid, .store-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
 .dashboard-two-col, .feature-badges { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
-.wallet-card, .status-visibility-card, .coin-store-card, .panel-pair-card, .panel-password-card { padding: 26px; }
+.wallet-card, .status-visibility-card, .coin-store-card, .panel-pair-card, .panel-password-card, .panel-commands-card { padding: 26px; }
+.command-groups { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+.command-card { padding: 18px; border-radius: 22px; background: rgba(255,255,255,0.04); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 14px; }
+.command-card-head strong { font-size: 1.05rem; font-weight: 900; }
+.command-list { display: flex; flex-direction: column; gap: 12px; }
+.command-item { padding: 14px 16px; border-radius: 18px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); }
+.command-item code { display: inline-block; margin-bottom: 8px; direction: ltr; unicode-bidi: plaintext; font-size: 0.95rem; font-weight: 800; color: #bfdbfe; }
+.command-item p { margin: 0; color: var(--muted); line-height: 1.8; font-size: 0.92rem; }
 .wallet-balance { display: flex; align-items: baseline; gap: 8px; margin: 8px 0 16px; }
 .wallet-balance strong { font-size: 2.6rem; font-weight: 900; background: linear-gradient(135deg, var(--panel-p), var(--panel-p2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .wallet-balance span { color: var(--muted); font-size: 1.05rem; }
@@ -630,7 +637,7 @@ img { max-width: 100%; display: block; }
 @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; } }
 
 @media (max-width: 980px) {
-  .wallet-grid, .store-grid, .dashboard-two-col, .feature-badges, .panel-fields { grid-template-columns: 1fr; }
+  .wallet-grid, .store-grid, .dashboard-two-col, .feature-badges, .panel-fields, .command-groups { grid-template-columns: 1fr; }
   .footer-cards { grid-template-columns: 1fr; }
 }
 @media (max-width: 920px) {

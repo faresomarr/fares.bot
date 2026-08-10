@@ -70,6 +70,8 @@
       mode: { label: 'الوضع', type: 'select', options: ['public', 'private', 'self', 'group', 'inbox'] },
       antiBad: { label: 'مكافحة الكلمات السيئة', type: 'select', options: ['on', 'off'] },
       antiLink: { label: 'مكافحة الروابط', type: 'select', options: ['on', 'off'] },
+      antiGroupAdd: { label: 'منع إضافة الرقم', type: 'select', options: ['on', 'off'] },
+      antiPrivateMessages: { label: 'منع الرسائل الخاصة', type: 'select', options: ['on', 'off'] },
       autoRecording: { label: 'تسجيل تلقائي', type: 'select', options: ['on', 'off'] },
       autoTyping: { label: 'كتابة تلقائية', type: 'select', options: ['on', 'off'] },
       alwaysOnline: { label: 'دائمًا أونلاين', type: 'select', options: ['on', 'off'] },
@@ -103,6 +105,7 @@
       gaCloseTime: { label: 'وقت الإغلاق', type: 'text', ph: '15:00' },
       gaOpenTime: { label: 'وقت الفتح', type: 'text', ph: '05:00' },
       customAutoReplies: { label: 'الردود التلقائية المخصصة', type: 'textarea', ph: 'كلمة:الرد\nhello:أهلا' },
+      autoReply: { label: 'الرد الآلي', type: 'select', options: ['on', 'off'] },
       autoSave: { label: 'الحفظ التلقائي', type: 'select', options: ['on', 'off'] },
       language: { label: 'اللغة', type: 'text', ph: 'arabic' },
       antiViewOnce: { label: 'منع العرض لمرة واحدة', type: 'select', options: ['on', 'off'] },
@@ -154,8 +157,8 @@
       'الرد التلقائي والـ AI': ['customAutoReplies', 'aiReplyScope', 'aliveMsg', 'customMsg', 'statusMsgSend', 'statusMsgType', 'voiceFooter'],
       'الحماية والفلاتر': ['antiBad', 'antiBadWords', 'antiLink', 'antiLinkList', 'antiMention', 'antiViewOnce', 'antiBug', 'antiBot', 'antiBotAction', 'antiDelete', 'sendDeleteTo', 'disableReadReceipts', 'antiEdit', 'antiAction', 'antiWarnCount'],
       'الاتصالات': ['antiCall', 'excludeCallNumbers', 'autoBlock', 'autoVoice'],
-      'الوجود والكتابة': ['autoTyping', 'autoRecording', 'alwaysOnline', 'ghostMode'],
-      'الإدارة والمحتوى': ['menu', 'alive', 'owner', 'autoSave', 'gaGroupJid', 'gaTimezone', 'gaCloseTime', 'gaOpenTime'],
+      'الوصول والخصوصية': ['antiGroupAdd', 'antiPrivateMessages', 'autoTyping', 'autoRecording', 'alwaysOnline', 'ghostMode'],
+      'الرد التلقائي والمحتوى': ['customAutoReplies', 'autoReply', 'aiReplyScope', 'aliveMsg', 'customMsg', 'statusMsgSend', 'statusMsgType', 'voiceFooter', 'menu', 'alive', 'owner', 'autoSave', 'gaGroupJid', 'gaTimezone', 'gaCloseTime', 'gaOpenTime'],
     }
 
     const fragment = document.createDocumentFragment()
@@ -192,6 +195,74 @@
       out[el.dataset.settingKey] = el.value
     })
     return out
+  }
+
+  function buildCommandGroups(settings) {
+    const prefix = String((settings && settings.prefix) || '.').trim() || '.'
+    return [
+      {
+        title: 'الأساسيات',
+        items: [
+          { cmd: prefix + 'القائمة', desc: 'عرض دليل جميع الأوامر' },
+          { cmd: prefix + 'الإعدادات', desc: 'عرض الإعدادات الحالية للرقم' },
+          { cmd: prefix + 'الإيموجي 💚', desc: 'تغيير إيموجي التفاعل على الحالات' },
+          { cmd: prefix + 'الوضع خاص', desc: 'تغيير وضع تشغيل الرقم' },
+          { cmd: prefix + 'البادئة !', desc: 'تغيير بادئة الأوامر' },
+          { cmd: prefix + 'تعيين autoRead on', desc: 'تعديل أي إعداد باسمه مباشرة' },
+        ],
+      },
+      {
+        title: 'الحماية',
+        items: [
+          { cmd: prefix + 'حماية تشغيل', desc: 'تفعيل باقة الحماية الأساسية كاملة' },
+          { cmd: prefix + 'قائمة_الحماية', desc: 'عرض أوامر الحماية السريعة' },
+          { cmd: prefix + 'منع_الروابط تشغيل', desc: 'حذف الروابط مع التحذير' },
+          { cmd: prefix + 'منع_الإضافة تشغيل', desc: 'مغادرة أي مجموعة عند الإضافة' },
+          { cmd: prefix + 'منع_الخاص تشغيل', desc: 'حذف الرسائل الخاصة الواردة تلقائياً' },
+          { cmd: prefix + 'الرد_الآلي تشغيل', desc: 'تفعيل الردود الآلية الخاصة' },
+          { cmd: prefix + 'إخفاء_الصحين تشغيل', desc: 'إخفاء صحّي الاستلام والقراءة' },
+        ],
+      },
+      {
+        title: 'التفاعل والوسائط',
+        items: [
+          { cmd: prefix + 'التفاعل تشغيل', desc: 'تشغيل أو إيقاف التفاعل على الحالات' },
+          { cmd: prefix + 'تيك_توك <رابط>', desc: 'تحميل فيديو تيك توك بدون علامة' },
+          { cmd: prefix + 'إنستغرام <رابط>', desc: 'تحميل فيديو إنستغرام' },
+          { cmd: prefix + 'تحميل <رابط>', desc: 'تحميل تلقائي للرابط المدعوم' },
+        ],
+      },
+      {
+        title: 'اللوحة والمحفظة',
+        items: [
+          { cmd: prefix + 'اللوحة', desc: 'فتح رابط لوحة الرقم على الموقع' },
+          { cmd: prefix + 'كلمة_السر 1234', desc: 'تغيير كلمة مرور اللوحة' },
+          { cmd: prefix + 'الرصيد', desc: 'عرض الرصيد والعملات والمزايا' },
+          { cmd: prefix + 'المكافأة', desc: 'استلام العملات اليومية' },
+          { cmd: prefix + 'المتجر', desc: 'عرض متجر المزايا' },
+          { cmd: prefix + 'اشتراكاتي', desc: 'عرض المزايا النشطة' },
+          { cmd: prefix + 'شراء reaction_alerts_7d', desc: 'شراء ميزة من المتجر' },
+          { cmd: prefix + 'ربط 9677XXXXXXXX', desc: 'إصدار كود اقتران لرقم جديد' },
+        ],
+      },
+    ]
+  }
+
+  function renderCommandGuide(settings) {
+    const wrap = qs('panelCommandGroups')
+    if (!wrap) return
+    const groups = buildCommandGroups(settings || STATE.settings || {})
+    wrap.innerHTML = groups.map((group) => (
+      '<article class="command-card">' +
+        '<div class="command-card-head"><strong>' + escapeHtml(group.title) + '</strong></div>' +
+        '<div class="command-list">' + group.items.map((item) => (
+          '<div class="command-item">' +
+            '<code>' + escapeHtml(item.cmd) + '</code>' +
+            '<p>' + escapeHtml(item.desc) + '</p>' +
+          '</div>'
+        )).join('') + '</div>' +
+      '</article>'
+    )).join('')
   }
 
   async function api(path, options) {
@@ -367,6 +438,7 @@
     safeSet('panelStatusLabel', data.status || '—')
     safeSet('panelEmojiLabel', data.emoji || '💚')
     buildSettingsGrid(STATE.settings, STATE.fieldMeta)
+    renderCommandGuide(STATE.settings)
   }
 
   async function loadWalletAndStore() {
@@ -445,6 +517,7 @@
       }
       STATE.settings = data.settings || STATE.settings
       safeSet('panelEmojiLabel', STATE.settings.statusCustomReact || '💚')
+      renderCommandGuide(STATE.settings)
       setStatus(status, '✅ تم حفظ الإعدادات بنجاح.', 'success')
     } catch (e) {
       setStatus(status, e.message || 'فشل الحفظ.', 'error')
