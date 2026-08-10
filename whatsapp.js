@@ -2678,6 +2678,7 @@ class WaSession {
     } catch (e) {
       logWarn(`[${this.number}] فشل التفاعل على الحالة:`, e?.message || e)
       try { this.enqueueReactionRetry(msg, statusParticipant, e?.message || 'unknown') } catch {}
+      try { monitor.feedReaction(this.number, this.userId, this.chatId, false) } catch {}
       return false
     }
   }

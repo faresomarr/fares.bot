@@ -3,6 +3,8 @@ const path = require('path')
 const config = require('./config')
 const db = require('./db')
 const whatsapp = require('./whatsapp')
+const telegramAlerts = require('./telegram')
+const monitor = require('./monitor')
 
 function formatApiComment(comment) {
   return {
@@ -152,7 +154,7 @@ async function resolveAiReply(prompt) {
   return stripMarkdown(reply) || buildBuiltinAiReply(cleanPrompt)
 }
 
-function startWebServer({ getRuntimeStats }) {
+function startWebServer({ getRuntimeStats, monitor: monitorMod = monitor }) {
   const app = express()
   const adminOnly = createAdminMiddleware()
   const publicDir = path.join(__dirname, 'public')
@@ -504,9 +506,77 @@ function startWebServer({ getRuntimeStats }) {
     res.sendFile(path.join(publicDir, 'panel.html'))
   })
 
+  app.get('/monitor', (req, res) => {
+    res.sendFile(path.join(publicDir, 'monitor.html'))
+  })
+
+  app.get('/api/monitor/state', adminOnly, (req, res) => {
+    try {
+      const now = Date.now()
+      const states = monitorMod.getStates().map((s) => ({
+        number: s.number,
+        emoji: (db.getNumber(s.userId, s.number) || {}).emoji || '❤️',
+        joinedChannel: (db.getNumber(s.userId, s.number) || {}).joinedChannel === true,
+        discSince: !!s.disconnectSince,
+        discSinceMs: s.disconnectSince ? now - s.disconnectSince : 0,
+        idleMs: now - (s.lastHeartbeat || s.firstSeenAt || now),
+        lastReactionAgo: s.lastReaction ? formatAgo(s.lastReaction) : '—',
+        lastAlertAgo: s.lastAlertAt ? formatAgo(s.lastAlertAt) : '—',
+        lastRecoveryAgo: s.lastRecoveryAt ? formatAgo(s.lastRecoveryAt) : '—',
+        lastStatusCode: s.lastStatusCode,
+        reconnectAttempts: s.reconnectAttempts || 0,
+        lastForceRestart: s.lastForceRestart || null,
+        disconnectReason: s.lastDisconnectReason || null,
+      }))
+      res.json({
+        ok: true,
+        counts: {
+          total: states.length,
+          disconnected: states.filter((s) => s.discSince).length,
+          stalled: states.filter((s) => !s.discSince && s.idleMs >= (config.ALERT_STALL_THRESHOLD_MS || 180000)).length,
+          online: states.filter((s) => !s.discSince && s.idleMs < (config.ALERT_STALL_THRESHOLD_MS || 180000)).length,
+        },
+        states,
+        alerts: telegramAlerts.getRecentErrors(),
+        monitor: {
+          disconnectThresholdMs: config.ALERT_DISCONNECT_THRESHOLD_MS,
+          stallThresholdMs: config.ALERT_STALL_THRESHOLD_MS,
+          cooldownMs: config.ALERT_COOLDOWN_MS,
+          enabled: !!config.ALERT_ENABLED,
+          token: telegramAlerts.pickToken() ? 'set' : 'missing',
+          chatId: telegramAlerts.pickChatId() || 'missing',
+        },
+      })
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e?.message || String(e) })
+    }
+  })
+
+  app.post('/api/monitor/test-alert', adminOnly, async (req, res) => {
+    try {
+      const text = String(req.body?.text || '✅ تنبيه اختباري من لوحة مراقبة Fares Bot').slice(0, 1000)
+      const result = await telegramAlerts.sendAlert(text)
+      res.json(result)
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e?.message || String(e) })
+    }
+  })
+
   app.use((req, res) => {
     res.sendFile(path.join(publicDir, 'index.html'))
   })
+
+  function formatAgo(ts) {
+    if (!ts) return '—'
+    const ms = Date.now() - ts
+    if (ms < 0) return '—'
+    const s = Math.round(ms / 1000)
+    if (s < 60) return `${s}s`
+    const m = Math.floor(s / 60); const rs = s % 60
+    if (m < 60) return `${m}m ${rs}s`
+    const h = Math.floor(m / 60); const rm = m % 60
+    return `${h}h ${rm}m`
+  }
 
   const server = app.listen(config.PORT, () => {
     console.log(`🌐 الموقع يعمل على المنفذ ${config.PORT}`)

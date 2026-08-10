@@ -4,6 +4,7 @@ const config = require('./config')
 const db = require('./db')
 const whatsapp = require('./whatsapp')
 const web = require('./web')
+const monitor = require('./monitor')
 
 const APP_STARTED_AT = Date.now()
 const pending = new Map()
@@ -744,6 +745,7 @@ async function gracefulShutdown(signal) {
   }, 8000)
 
   try {
+    monitor.stop()
     await whatsapp.shutdownAll()
     await db.close()
     clearTimeout(forceExit)
@@ -767,8 +769,14 @@ async function main() {
   bot = new TelegramBot(config.TELEGRAM_TOKEN, { polling: true })
   registerTelegramHandlers()
 
-  web.startWebServer({ getRuntimeStats })
+  web.startWebServer({ getRuntimeStats, monitor })
   await whatsapp.resumeAll()
+  if (config.ALERT_ENABLED) {
+    monitor.start()
+    console.log('🔔 مراقب التنبيهات يعمل')
+  } else {
+    console.log('🔕 مراقب التنبيهات معطل (ALERT_ENABLED=false)')
+  }
   console.log('🤖 بوت التفاعل يعمل... (اضغط Ctrl+C للإيقاف)')
 }
 

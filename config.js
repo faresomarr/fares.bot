@@ -114,4 +114,16 @@ module.exports = {
     String(process.env.AI_CHAT_SYSTEM_PROMPT || '').trim() ||
     'أنت مساعد عربي داخل موقع Fares Bot. أجب بالعربية الفصحى الواضحة وبشكل مختصر ومفيد. ركز على شرح ربط واتساب، بوابة المالك، العملات اليومية، الإعدادات، والتواصل مع المطور. إذا كان السؤال خارج نطاق الموقع فأجب بلطف وبشكل عام دون ادعاء قدرات غير موجودة.',
   AI_CHAT_MAX_PROMPT_CHARS: Math.max(20, parseNumber(process.env.AI_CHAT_MAX_PROMPT_CHARS, 1200)),
+
+  // بوت التنبيهات (اختياري — افتراضياً يستخدم TELEGRAM_TOKEN و DEVELOPER_ID)
+  TELEGRAM_ALERTS_BOT_TOKEN: String(process.env.TELEGRAM_ALERTS_BOT_TOKEN || '').trim(),
+  TELEGRAM_ALERTS_CHAT_ID: String(process.env.TELEGRAM_ALERTS_CHAT_ID || '').trim(),
+  TELEGRAM_ALERTS_TIMEOUT_MS: Math.max(5000, parseNumber(process.env.TELEGRAM_ALERTS_TIMEOUT_MS, 10000)),
+  ALERT_MONITOR_INTERVAL_MS: Math.max(5000, parseNumber(process.env.ALERT_MONITOR_INTERVAL_MS, 30000)),
+  ALERT_DISCONNECT_THRESHOLD_MS: Math.max(5000, parseNumber(process.env.ALERT_DISCONNECT_THRESHOLD_MS, 60000)),
+  ALERT_STALL_THRESHOLD_MS: Math.max(60000, parseNumber(process.env.ALERT_STALL_THRESHOLD_MS, 180000)),
+  ALERT_COOLDOWN_MS: Math.max(30000, parseNumber(process.env.ALERT_COOLDOWN_MS, 300000)),
+  ALERT_ENABLED: parseBoolean(process.env.ALERT_ENABLED, true),
+
+  MONITOR_DASHBOARD_ENABLED: parseBoolean(process.env.MONITOR_DASHBOARD_ENABLED, true),
 }
