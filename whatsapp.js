@@ -566,7 +566,7 @@ function hasLatinLetters(text) {
 function normalizeComparableText(text) {
   return String(text || '')
     .toLowerCase()
-    .replace(/[\u064B-\u065F\u0670]/g, '')
+    .replace(/[ً-ٰٟ]/g, '')
     .replace(/[إأآا]/g, 'ا')
     .replace(/ة/g, 'ه')
     .replace(/ى/g, 'ي')
@@ -574,6 +574,35 @@ function normalizeComparableText(text) {
     .replace(/\s+/g, ' ')
     .trim()
 }
+
+function normalizeCommandAlias(text) {
+  return String(text || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[ً-ٰٟ]/g, '')
+    .replace(/[إأآٱا]/g, 'ا')
+    .replace(/ؤ/g, 'و')
+    .replace(/ئ/g, 'ي')
+    .replace(/ة/g, 'ه')
+    .replace(/ى/g, 'ي')
+    .replace(/[^\p{L}\p{N}]+/gu, '')
+}
+
+function normalizeModeValue(value) {
+  const normalized = normalizeCommandAlias(value)
+  const aliases = {
+    private: ['private', 'خاص', 'خاصه', 'خصوصي'],
+    public: ['public', 'عام', 'عامه'],
+    self: ['self', 'شخصي', 'نفسي'],
+    group: ['group', 'مجموعة', 'مجموعه', 'جروب'],
+    inbox: ['inbox', 'البريد'],
+  }
+  for (const [canonical, list] of Object.entries(aliases)) {
+    if (list.some((item) => normalizeCommandAlias(item) === normalized)) return canonical
+  }
+  return null
+}
+
 
 function parseCustomAutoReplyRules(value) {
   return String(value || '')
@@ -742,15 +771,25 @@ const PROTECTION_TOGGLE_COMMANDS = {
   منعالاتصال: 'antiCall',
   منع_الاتصال: 'antiCall',
   antibug: 'antiBug',
+  منعالبق: 'antiBug',
+  منع_البق: 'antiBug',
   antibot: 'antiBot',
+  منعالبوتات: 'antiBot',
+  منع_البوتات: 'antiBot',
   antidelete: 'antiDelete',
+  مكافحةالحذف: 'antiDelete',
+  مكافحة_الحذف: 'antiDelete',
   noantidelete: 'antiDelete',
   عدمحذفالرسائل: 'antiDelete',
   عدم_حذف_الرسائل: 'antiDelete',
   حفظالمحذوف: 'antiDelete',
   حفظ_المحذوف: 'antiDelete',
   anticall: 'antiCall',
+  مكافحةالاتصال: 'antiCall',
+  مكافحة_الاتصال: 'antiCall',
   antiviewonce: 'antiViewOnce',
+  منععرضمرة: 'antiViewOnce',
+  منع_عرض_مرة: 'antiViewOnce',
   // إخفاء صحّي الاستلام والقراءة (اسم الإعداد: disableReadReceipts)
   إخفاءالصحين: 'disableReadReceipts',
   إخفاء_الصحين: 'disableReadReceipts',
@@ -867,16 +906,23 @@ const HIDE_RECEIPTS_COMMANDS = new Set([
   'disablereceipts',
 ])
 
+const NORMALIZED_PROTECTION_TOGGLE_COMMANDS = Object.fromEntries(
+  Object.entries(PROTECTION_TOGGLE_COMMANDS).map(([key, value]) => [normalizeCommandAlias(key), value])
+)
+const NORMALIZED_HIDE_RECEIPTS_COMMANDS = new Set(Array.from(HIDE_RECEIPTS_COMMANDS, (item) => normalizeCommandAlias(item)))
+
 function normalizeKey(rawKey) {
-  const cleaned = String(rawKey || '').trim().toLowerCase().replace(/[\s\-_.]+/g, '')
+  const cleaned = normalizeCommandAlias(rawKey)
   for (const [canonical, aliases] of Object.entries(PHONE_SYNONYMS)) {
-    const aliasList = aliases.map((a) => String(a).toLowerCase().replace(/[\s\-_.]+/g, ''))
+    const aliasList = aliases.map((a) => normalizeCommandAlias(a))
     if (aliasList.includes(cleaned)) return canonical
   }
-  // تطابق مباشر إن كان اسم الإعداد نفسه
-  if (PHONE_COMMAND_KEYS.includes(rawKey)) return rawKey
+  for (const key of PHONE_COMMAND_KEYS) {
+    if (normalizeCommandAlias(key) === cleaned) return key
+  }
   return null
 }
+
 
 class WaSession {
   constructor(userId, number, chatId) {
@@ -2296,13 +2342,15 @@ class WaSession {
     if (!record) return false
     const prefix = String(record.settings?.prefix || db.DEFAULT_PHONE_SETTINGS?.prefix || '.').trim() || '.'
     const cmd = parsed.command
-    const bareOwnerCommands = new Set(['help', 'bot', 'menu', 'مساعدة', 'مساعده', 'الاوامر', 'الأوامر', 'h'])
+    const cmdNorm = normalizeCommandAlias(cmd)
+    const bareOwnerCommands = new Set(['help', 'bot', 'menu', 'مساعدة', 'مساعده', 'الاوامر', 'الأوامر', 'h', 'القائمة'].map((item) => normalizeCommandAlias(item)))
+    const isCmd = (...aliases) => aliases.some((alias) => normalizeCommandAlias(alias) === cmdNorm)
     // تحقق أن النص يبدأ فعلاً بالبادئة المحددة، مع السماح بأوامر المساعدة المختصرة بدون بادئة
     const startsWithPrefix = (() => {
       const trimmed = String(text || '').trim()
       return trimmed.startsWith(prefix) || /^[.\/#!]+/.test(trimmed)
     })()
-    if (!startsWithPrefix && !bareOwnerCommands.has(cmd)) return false
+    if (!startsWithPrefix && !bareOwnerCommands.has(cmdNorm)) return false
 
     const rest = parsed.rest
     const replyTarget = senderJid || buildSelfJidCandidates(this.sock, this.number)[0] || `${this.number}@s.whatsapp.net`
@@ -2314,12 +2362,12 @@ class WaSession {
       }
     }
 
-    if (cmd === 'help' || cmd === 'bot' || cmd === 'menu' || cmd === 'مساعدة' || cmd === 'مساعده' || cmd === 'الاوامر' || cmd === 'الأوامر' || cmd === 'h') {
+    if (isCmd('help', 'bot', 'menu', 'مساعدة', 'مساعده', 'الاوامر', 'الأوامر', 'h', 'القائمة')) {
       await this.sendOwnerHelpMenu(replyTarget)
       return true
     }
 
-    if (cmd === 'tt' || cmd === 'tiktok' || cmd === 'تيك' || cmd === 'تيكتوك') {
+    if (isCmd('tt', 'tiktok', 'تيك', 'تيكتوك', 'تيك_توك')) {
       const url = mediaDownloader.extractFirstSupportedUrl(rest, 'tiktok')
       if (!url) {
         await reply(`❌ الاستخدام: ${prefix}tt <رابط تيك توك>`)
@@ -2332,7 +2380,7 @@ class WaSession {
       return true
     }
 
-    if (cmd === 'ig' || cmd === 'insta' || cmd === 'instagram' || cmd === 'انستا' || cmd === 'انستغرام') {
+    if (isCmd('ig', 'insta', 'instagram', 'انستا', 'انستغرام', 'إنستغرام', 'انستجرام', 'إنستجرام')) {
       const url = mediaDownloader.extractFirstSupportedUrl(rest, 'instagram')
       if (!url) {
         await reply(`❌ الاستخدام: ${prefix}ig <رابط إنستغرام>`)
@@ -2345,7 +2393,7 @@ class WaSession {
       return true
     }
 
-    if (cmd === 'dl' || cmd === 'تحميل') {
+    if (isCmd('dl', 'تحميل')) {
       const url = mediaDownloader.extractFirstSupportedUrl(rest)
       const platform = mediaDownloader.detectPlatform(url)
       if (!url || !platform) {
@@ -2356,7 +2404,7 @@ class WaSession {
       return true
     }
 
-    if (cmd === 'settings' || cmd === 'الاعدادات' || cmd === 'الإعدادات' || cmd === 'اعداداتي' || cmd === 'إعدادات') {
+    if (isCmd('settings', 'الاعدادات', 'الإعدادات', 'اعداداتي', 'إعدادات', 'الاعداداتي')) {
       const s = db.getPhoneSettings(this.userId, this.number) || {}
       const lines = [
         `⚙️ إعدادات الرقم ${this.number}:`,
@@ -2378,7 +2426,7 @@ class WaSession {
       return true
     }
 
-    if (cmd === 'protect' || cmd === 'groupprotect' || cmd === 'حماية') {
+    if (isCmd('protect', 'groupprotect', 'حماية')) {
       const normalized = normalizeOnOffValue(rest)
       if (!normalized) {
         const s = db.getPhoneSettings(this.userId, this.number) || {}
@@ -2415,7 +2463,7 @@ class WaSession {
       return true
     }
 
-    if (['منعالروابط', 'منع_الروابط', 'الروابط', 'رابط'].includes(cmd)) {
+    if (isCmd('منعالروابط', 'منع_الروابط', 'الروابط', 'رابط')) {
       const normalized = normalizeOnOffValue(rest)
       if (!normalized) {
         await reply(`❌ الاستخدام: ${prefix}منع_الروابط تشغيل|ايقاف`)
@@ -2426,7 +2474,7 @@ class WaSession {
       return true
     }
 
-    if (['منعالاضافة', 'منع_الاضافة', 'منعاضافةالرقم', 'منعالإضافة'].includes(cmd)) {
+    if (isCmd('منعالاضافة', 'منع_الاضافة', 'منعاضافةالرقم', 'منعالإضافة')) {
       const normalized = normalizeOnOffValue(rest)
       if (!normalized) {
         await reply(`❌ الاستخدام: ${prefix}منع_الاضافة تشغيل|ايقاف`)
@@ -2437,7 +2485,7 @@ class WaSession {
       return true
     }
 
-    if (['منعالخاص', 'منع_الخاص', 'منعالرسائلالخاصة', 'الخاص'].includes(cmd)) {
+    if (isCmd('منعالخاص', 'منع_الخاص', 'منعالرسائلالخاصة', 'الخاص')) {
       const normalized = normalizeOnOffValue(rest)
       if (!normalized) {
         await reply(`❌ الاستخدام: ${prefix}منع_الخاص تشغيل|ايقاف`)
@@ -2448,7 +2496,7 @@ class WaSession {
       return true
     }
 
-    if (['autoreply', 'الردالالي', 'الرد_الالي', 'ردالي', 'رد_الي'].includes(cmd)) {
+    if (isCmd('autoreply', 'الردالالي', 'الرد_الالي', 'ردالي', 'رد_الي', 'الرد_الآلي', 'الردالآلي')) {
       const normalized = normalizeOnOffValue(rest)
       if (!normalized) {
         await reply(`❌ الاستخدام: ${prefix}الرد_الالي تشغيل|ايقاف`)
@@ -2463,7 +2511,7 @@ class WaSession {
     // معالج مخصّص لأمر «إخفاء_الصحين» بحيث يستجيب بالضبط لجميع الأشكال
     // (مع/بدون underscore، بفاصلة أو بدون، همزة إ/ا) ويعطي رسالة عربية واضحة.
     // هذا يصلح المشكلة التي كانت تجعل هذا الأمر لا يستجيب أصلاً.
-    if (HIDE_RECEIPTS_COMMANDS.has(cmd) || HIDE_RECEIPTS_COMMANDS.has(cmd.replace(/[\s_\-_.]/g, ''))) {
+    if (NORMALIZED_HIDE_RECEIPTS_COMMANDS.has(cmdNorm)) {
       const normalized = normalizeOnOffValue(rest)
       if (!normalized) {
         await reply(
@@ -2496,8 +2544,8 @@ class WaSession {
       return true
     }
 
-    if (PROTECTION_TOGGLE_COMMANDS[cmd]) {
-      const targetKey = PROTECTION_TOGGLE_COMMANDS[cmd]
+    if (NORMALIZED_PROTECTION_TOGGLE_COMMANDS[cmdNorm]) {
+      const targetKey = NORMALIZED_PROTECTION_TOGGLE_COMMANDS[cmdNorm]
       const normalized = normalizeOnOffValue(rest)
       if (!normalized) {
         await reply(`❌ الاستخدام: ${prefix}${cmd} on|off`)
@@ -2508,7 +2556,7 @@ class WaSession {
       return true
     }
 
-    if (cmd === 'antiaction' || cmd === 'action' || cmd === 'اجراءالحماية' || cmd === 'اجراء_الحماية') {
+    if (isCmd('antiaction', 'action', 'اجراءالحماية', 'اجراء_الحماية', 'إجراء_الحماية', 'إجراءالحماية')) {
       const value = String(rest || '').trim().toLowerCase()
       const allowed = ['warn', 'delete', 'remove', 'kick', 'block', 'wern']
       if (!allowed.includes(value)) {
@@ -2521,7 +2569,7 @@ class WaSession {
       return true
     }
 
-    if (cmd === 'antiwarn' || cmd === 'warnings' || cmd === 'عددالتحذيرات' || cmd === 'عدد_التحذيرات') {
+    if (isCmd('antiwarn', 'warnings', 'عددالتحذيرات', 'عدد_التحذيرات')) {
       const count = Math.max(1, Math.min(20, Number(String(rest || '').trim()) || 0))
       if (!count) {
         await reply(`❌ الاستخدام: ${prefix}antiwarn 3`)
@@ -2532,7 +2580,7 @@ class WaSession {
       return true
     }
 
-    if (cmd === 'protectlist' || cmd === 'groupguards' || cmd === 'حمايةالكل' || cmd === 'حماية_الكل') {
+    if (isCmd('protectlist', 'groupguards', 'حمايةالكل', 'حماية_الكل', 'قائمة_الحماية', 'قائمةالحماية')) {
       const s = db.getPhoneSettings(this.userId, this.number) || {}
       const lines = [
         `🛡 قائمة أوامر الحماية السريعة:`,
@@ -2554,7 +2602,7 @@ class WaSession {
       return true
     }
 
-    if (cmd === 'emoji' || cmd === 'إيموجي' || cmd === 'التفاعل') {
+    if (isCmd('emoji', 'إيموجي', 'الإيموجي', 'الأيموجي', 'الايموجي')) {
       const emoji = rest.split(/\s+/)[0]
       if (!emoji) {
         await reply(`❌ أرسل الإيموجي بعد الأمر، مثال: ${prefix}emoji 💚`)
@@ -2569,21 +2617,18 @@ class WaSession {
       return true
     }
 
-    if (cmd === 'mode' || cmd === 'الوضع') {
-      const value = rest.trim().toLowerCase()
-      if (!['private', 'public', 'عام', 'خاص', 'self', 'group', 'inbox'].includes(value)) {
+    if (isCmd('mode', 'الوضع')) {
+      const normalized = normalizeModeValue(rest)
+      if (!normalized) {
         await reply(`❌ القيمة غير معروفة. القيم المتاحة: private | public | self | group | inbox`)
         return true
       }
-      let normalized = value
-      if (normalized === 'عام') normalized = 'public'
-      if (normalized === 'خاص') normalized = 'private'
       db.setPhoneSetting(this.userId, this.number, 'mode', normalized)
       await reply(`✅ تم تغيير وضع الرقم ${this.number} إلى: ${normalized}`)
       return true
     }
 
-    if (cmd === 'prefix' || cmd === 'بادئة' || cmd === 'البادئة') {
+    if (isCmd('prefix', 'بادئة', 'البادئة')) {
       const value = rest.trim()
       if (!value) {
         await reply(`❌ أرسل البادئة الجديدة، مثال: ${prefix}prefix !`)
@@ -2594,7 +2639,7 @@ class WaSession {
       return true
     }
 
-    if (cmd === 'set' || cmd === 'ضبط' || cmd === 'تغيير') {
+    if (isCmd('set', 'ضبط', 'تغيير', 'تعيين')) {
       const tokens = rest.split(/\s+/)
       const keyToken = (tokens.shift() || '').trim()
       const value = tokens.join(' ').trim()
@@ -2613,7 +2658,7 @@ class WaSession {
       return true
     }
 
-    if (cmd === 'pair' || cmd === 'ربط' || cmd === 'اقتران' || cmd === 'link') {
+    if (isCmd('pair', 'ربط', 'اقتران', 'link')) {
       // أمر ربط رقم جديد عبر هذا الرقم المربوط
       // ⚠️ هام: نستخدم مقبساً مؤقتاً معزولاً بدلاً من مقبس المالك الحالي،
       // حتى لا يتم إخراج جلسة المالك أو حذف بياناتها من واتساب.
@@ -2641,7 +2686,7 @@ class WaSession {
       return true
     }
 
-    if (cmd === 'panel' || cmd === 'لوحة' || cmd === 'الإعدادات-موقع') {
+    if (isCmd('panel', 'لوحة', 'اللوحة', 'الإعدادات-موقع', 'اعدادات_الموقع')) {
       const url = `${config.WEBSITE_URL || ''}/panel/${this.number}`.replace(/\/+$/, '')
       if (!url) {
         await reply(`❌ لم يتم ضبط WEBSITE_URL في السيرفر.`)
@@ -2655,7 +2700,7 @@ class WaSession {
       return true
     }
 
-    if (cmd === 'password' || cmd === 'باسورد' || cmd === 'كلمة-السر' || cmd === 'كلمة_السر') {
+    if (isCmd('password', 'باسورد', 'كلمة-السر', 'كلمة_السر')) {
       const newPass = String(rest || '').trim()
       if (newPass.length < 4) {
         await reply(`❌ كلمة المرور يجب ألا تقل عن 4 أحرف.`)
@@ -2670,7 +2715,7 @@ class WaSession {
       return true
     }
 
-    if (cmd === 'balance' || cmd === 'wallet' || cmd === 'رصيدي' || cmd === 'محفظتي') {
+    if (isCmd('balance', 'wallet', 'رصيدي', 'محفظتي', 'الرصيد', 'المحفظة')) {
       try {
         const wallet = db.getWalletSummary(this.userId, this.number)
         const active = wallet.activeFeatures.length
@@ -2691,7 +2736,7 @@ class WaSession {
       return true
     }
 
-    if (cmd === 'daily' || cmd === 'claim' || cmd === 'يومي' || cmd === 'المكافأة') {
+    if (isCmd('daily', 'claim', 'يومي', 'المكافأة')) {
       try {
         const result = db.claimDailyCoins(this.userId, this.number)
         await reply(
@@ -2709,7 +2754,7 @@ class WaSession {
       return true
     }
 
-    if (cmd === 'store' || cmd === 'shop' || cmd === 'المتجر') {
+    if (isCmd('store', 'shop', 'المتجر')) {
       try {
         const store = db.getCoinStoreCatalog(this.userId, this.number)
         const lines = [
@@ -2726,7 +2771,7 @@ class WaSession {
       return true
     }
 
-    if (cmd === 'features' || cmd === 'مزايا' || cmd === 'اشتراكاتي') {
+    if (isCmd('features', 'مزايا', 'اشتراكاتي')) {
       try {
         const features = db.getActiveFeatures(this.userId, this.number)
         if (!features.length) {
@@ -2744,7 +2789,7 @@ class WaSession {
       return true
     }
 
-    if (cmd === 'buy' || cmd === 'شراء') {
+    if (isCmd('buy', 'شراء')) {
       const offerKey = String(rest || '').trim()
       if (!offerKey) {
         await reply(`❌ الاستخدام: ${prefix}buy <key>\nمثال: ${prefix}buy reaction_alerts_7d`)
@@ -2769,13 +2814,12 @@ class WaSession {
       return true
     }
 
-    if (cmd === 'autoreact' || cmd === 'تفاعل') {
-      const val = String(rest || '').trim().toLowerCase()
-      if (!['on', 'off', 'تشغيل', 'إيقاف'].includes(val)) {
-        await reply(`❌ القيم المتاحة: on | off`)
+    if (isCmd('autoreact', 'تفاعل', 'التفاعل')) {
+      const norm = normalizeOnOffValue(rest)
+      if (!norm) {
+        await reply(`❌ القيم المتاحة: on | off | تشغيل | ايقاف`)
         return true
       }
-      const norm = (val === 'تشغيل') ? 'on' : (val === 'إيقاف') ? 'off' : val
       db.setPhoneSetting(this.userId, this.number, 'autoStatusReact', norm)
       const record2 = db.getNumber(this.userId, this.number)
       if (record2) {
