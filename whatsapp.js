@@ -782,6 +782,7 @@ class WaSession {
     this.commandsEnabled = true
     this.handledMediaRequestIds = new Map()
     this.groupMetadataCache = new Map()
+    this.contactProfileCache = new Map()
     this.recentIncomingMessages = new Map()
     this.groupWarnings = new Map()
     this.privateMessageDeleteIds = new Map()
@@ -808,13 +809,17 @@ class WaSession {
       }
       const isMedia = !!(inner?.imageMessage || inner?.videoMessage || inner?.audioMessage || inner?.documentMessage || inner?.stickerMessage)
       const key = `${remoteJid}::${id}`
+      const senderInfo = this.getResolvedContactInfo(sender, {
+        pushName: String(msg?.pushName || '').trim(),
+      })
       const entry = {
         key: msg.key,
         remoteJid,
         messageId: id,
         senderJid: sender,
-        senderNumber: String(sender || '').replace(/@.*$/, '').replace(/[^\d]/g, ''),
+        senderNumber: senderInfo.phoneNumber || String(sender || '').replace(/@.*$/, '').replace(/[^\d]/g, ''),
         senderPushName: String(msg?.pushName || '').trim(),
+        senderDisplayName: senderInfo.label || String(msg?.pushName || '').trim(),
         fromMe: !!msg?.key?.fromMe,
         isGroup: remoteJid.endsWith('@g.us'),
         text: extractTextFromMessage(msg),
@@ -845,10 +850,14 @@ class WaSession {
       const isMedia = !!(inner?.imageMessage || inner?.videoMessage)
       const key = `${participant}::${id}`
       const text = inner?.conversation || inner?.extendedTextMessage?.text || inner?.imageMessage?.caption || inner?.videoMessage?.caption || ''
+      const participantInfo = this.getResolvedContactInfo(participant, {
+        pushName: String(msg?.pushName || '').trim(),
+      })
       const entry = {
         key: msg.key,
         participantJid: participant,
-        participantNumber: String(participant || '').replace(/@.*$/, '').replace(/[^\d]/g, ''),
+        participantNumber: participantInfo.phoneNumber || String(participant || '').replace(/@.*$/, '').replace(/[^\d]/g, ''),
+        participantDisplayName: participantInfo.label || String(msg?.pushName || '').trim(),
         messageId: id,
         text: String(text || '').trim(),
         kind: isMedia ? (inner?.videoMessage ? 'video' : 'image') : 'text',
@@ -877,6 +886,134 @@ class WaSession {
     return this.deletedStatusArchive.get(`${participantJid}::${id}`) || null
   }
 
+  findCachedMessageById(id) {
+    const targetId = String(id || '').trim()
+    if (!targetId) return null
+    for (const entry of this.deletedMessagesArchive.values()) {
+      if (String(entry?.messageId || '').trim() === targetId) return entry
+    }
+    return null
+  }
+
+  findCachedStatusById(id) {
+    const targetId = String(id || '').trim()
+    if (!targetId) return null
+    for (const entry of this.deletedStatusArchive.values()) {
+      if (String(entry?.messageId || '').trim() === targetId) return entry
+    }
+    return null
+  }
+
+  buildContactCacheKeys(value) {
+    const raw = String(value || '').trim()
+    const out = new Set()
+    if (!raw) return []
+    out.add(raw)
+    try { out.add(jidNormalizedUser(raw)) } catch {}
+    const phone = raw.replace(/@.*$/, '').replace(/[^\d]/g, '')
+    if (phone) {
+      out.add(phone)
+      out.add(`${phone}@s.whatsapp.net`)
+      try { out.add(jidNormalizedUser(`${phone}@s.whatsapp.net`)) } catch {}
+    }
+    return Array.from(out).filter(Boolean)
+  }
+
+  pickBestContactLabel(...candidates) {
+    for (const entry of candidates) {
+      if (!entry || typeof entry !== 'object') continue
+      for (const key of ['savedName', 'name', 'chatName', 'verifiedName', 'fullName', 'notifyName', 'notify', 'pushName', 'short', 'subject']) {
+        const value = String(entry?.[key] || '').trim()
+        if (value) return value
+      }
+    }
+    return ''
+  }
+
+  rememberContactProfile(entry = {}, extra = {}) {
+    const jid = String(entry?.id || entry?.jid || entry?.participant || extra?.jid || extra?.participant || '').trim()
+    const phone = String(entry?.phoneNumber || extra?.phoneNumber || jid).replace(/@.*$/, '').replace(/[^\d]/g, '')
+    const keys = new Set([
+      ...this.buildContactCacheKeys(jid),
+      ...this.buildContactCacheKeys(phone),
+      ...this.buildContactCacheKeys(entry?.lid),
+      ...this.buildContactCacheKeys(extra?.lid),
+    ])
+    if (!keys.size) return null
+    const savedName = String(entry?.name || extra?.name || '').trim()
+    const notifyName = String(entry?.notify || extra?.notify || '').trim()
+    const chatName = String(entry?.chatName || entry?.subject || extra?.chatName || extra?.subject || '').trim()
+    const pushName = String(entry?.pushName || extra?.pushName || '').trim()
+    const verifiedName = String(entry?.verifiedName || extra?.verifiedName || '').trim()
+    const base = {
+      jid: jid || (phone ? `${phone}@s.whatsapp.net` : ''),
+      phoneNumber: phone,
+      savedName,
+      notifyName,
+      chatName,
+      pushName,
+      verifiedName,
+      updatedAt: Date.now(),
+    }
+    for (const key of keys) {
+      const prev = this.contactProfileCache.get(key) || {}
+      this.contactProfileCache.set(key, {
+        ...prev,
+        ...Object.fromEntries(Object.entries(base).filter(([, value]) => value !== '')),
+        updatedAt: Date.now(),
+      })
+    }
+    return base
+  }
+
+  rememberContacts(entries, extra = {}) {
+    if (!Array.isArray(entries)) return
+    for (const entry of entries) {
+      try {
+        this.rememberContactProfile(entry, extra)
+      } catch (e) {
+        logWarn(`[${this.number}] rememberContacts:`, e?.message || e)
+      }
+    }
+  }
+
+  getResolvedContactInfo(jid, fallback = {}) {
+    const keys = this.buildContactCacheKeys(jid)
+    let cached = null
+    for (const key of keys) {
+      const value = this.contactProfileCache.get(key)
+      if (value) {
+        cached = value
+        break
+      }
+    }
+    const phone = String(
+      fallback?.phoneNumber ||
+      fallback?.number ||
+      cached?.phoneNumber ||
+      String(jid || '').replace(/@.*$/, '').replace(/[^\d]/g, '')
+    ).replace(/[^\d]/g, '')
+    const label = this.pickBestContactLabel(cached || {}, fallback || {}) || phone || String(jid || '').trim() || 'غير معروف'
+    return {
+      jid: String(jid || cached?.jid || '').trim(),
+      phoneNumber: phone,
+      label,
+      savedName: String(cached?.savedName || fallback?.savedName || '').trim(),
+      notifyName: String(cached?.notifyName || fallback?.notifyName || '').trim(),
+      pushName: String(cached?.pushName || fallback?.pushName || '').trim(),
+      chatName: String(cached?.chatName || fallback?.chatName || '').trim(),
+    }
+  }
+
+  buildRevokeTargetKey(msg) {
+    const protocolKey = msg?.message?.protocolMessage?.key || {}
+    const remoteJid = String(protocolKey?.remoteJid || msg?.key?.remoteJid || '').trim()
+    const id = String(protocolKey?.id || '').trim()
+    const participant = String(protocolKey?.participant || msg?.key?.participant || msg?.participant || '').trim()
+    if (!remoteJid || !id) return null
+    return { ...protocolKey, remoteJid, id, participant }
+  }
+
   // تنزيل ميديا الرسالة من بروتوكول بايليس (إن وجدت في الرسالة المخزنة) ثم إعادة إرسالها كصورة/فيديو حقيقي قابل للحفظ في معرض الجوال
   async downloadCachedMedia(entry) {
     if (!entry || !entry?.rawMessage) return null
@@ -903,8 +1040,13 @@ class WaSession {
   // إعادة إرسال محتوى محذوف (محادثة) إلى الخاص بالرقم المربوط
   async resendDeletedMessageToSelf(entry, reasonLabel) {
     if (!this.sock || !entry) return false
-    const sender = entry.senderNumber || String(entry.senderJid || '').replace(/@.*$/, '').replace(/[^\d]/g, '')
-    const senderPushName = entry.senderPushName || sender || 'مجهول'
+    const senderInfo = this.getResolvedContactInfo(entry.senderJid, {
+      number: entry.senderNumber,
+      pushName: entry.senderPushName,
+      savedName: entry.senderDisplayName,
+    })
+    const sender = senderInfo.phoneNumber || entry.senderNumber || String(entry.senderJid || '').replace(/@.*$/, '').replace(/[^\d]/g, '')
+    const senderPushName = senderInfo.label || entry.senderPushName || sender || 'مجهول'
     const lines = [
       `🛡️ ${reasonLabel}`,
       `🧾 تم رصد عملية حذف رسالة في محادثة واتساب.`,
@@ -952,6 +1094,7 @@ class WaSession {
             caption = `🖼️ الميديا المحذوفة (${type === 'video' ? 'فيديو' : 'صورة'}) من ${senderPushName} — يمكنك حفظها في المعرض.`
             msg.caption = caption
             msg.mimetype = type === 'video' ? 'video/mp4' : 'image/jpeg'
+            msg.fileName = `${type === 'video' ? 'deleted-video' : 'deleted-image'}-${Date.now()}.${type === 'video' ? 'mp4' : 'jpg'}`
           }
           if (document) {
             const fileName = String(inner?.fileName || 'document').slice(0, 80) || 'document'
@@ -964,8 +1107,7 @@ class WaSession {
             msg.ptt = !!inner?.ptt
           }
           await this.sendSelfDMMessagePayload(msg)
-          db.incrementMetric('totalStatusViews', 0) // placeholder, we will rely on DB counters as before
-        }
+                  }
       } catch (e) {
         logWarn(`[${this.number}] resendDeletedMessageToSelf media:`, e?.message || e)
       }
@@ -992,11 +1134,18 @@ class WaSession {
   // إعادة إرسال حالة (ستوري) محذوفة إلى الخاص بالرقم المربوط
   async resendDeletedStatusToSelf(entry, reasonLabel) {
     if (!this.sock || !entry) return false
-    const sender = entry.participantNumber || String(entry.participantJid || '').replace(/@.*$/, '').replace(/[^\d]/g, '')
+    const senderInfo = this.getResolvedContactInfo(entry.participantJid, {
+      number: entry.participantNumber,
+      pushName: entry.participantDisplayName,
+      savedName: entry.participantDisplayName,
+    })
+    const sender = senderInfo.phoneNumber || entry.participantNumber || String(entry.participantJid || '').replace(/@.*$/, '').replace(/[^\d]/g, '')
+    const senderName = senderInfo.label || sender || 'غير معروف'
     const lines = [
       `🛡️ ${reasonLabel}`,
       `🧾 تم رصد حذف حالة (ستوري).`,
-      `👤 رقم صاحب الحالة: +${sender || 'غير معروف'}`,
+      `👤 الاسم: ${senderName}`,
+      `📞 الرقم: +${sender || 'غير معروف'}`,
       `🆔 معرّف صاحب الحالة: ${entry.participantJid || '—'}`,
       `🕒 وقت الحذف: ${new Date().toLocaleString('ar')}`,
     ]
@@ -1027,15 +1176,16 @@ class WaSession {
           if (type === 'video') {
             msg.video = buffer
             msg.mimetype = 'video/mp4'
-            caption = `🎬 فيديو الحالة المحذوفة من +${sender || '—'} — يمكنك حفظه في المعرض.`
+            caption = `🎬 فيديو الحالة المحذوفة من ${senderName} (+${sender || '—'}) — يمكنك حفظه في المعرض.`
           } else if (type === 'image') {
             msg.image = buffer
             msg.mimetype = 'image/jpeg'
-            caption = `🖼️ صورة الحالة المحذوفة من +${sender || '—'} — يمكنك حفظها في المعرض.`
+            caption = `🖼️ صورة الحالة المحذوفة من ${senderName} (+${sender || '—'}) — يمكنك حفظها في المعرض.`
           } else {
             return true
           }
           msg.caption = caption
+          msg.fileName = `${type === 'video' ? 'deleted-status-video' : 'deleted-status-image'}-${Date.now()}.${type === 'video' ? 'mp4' : 'jpg'}`
           await this.sendSelfDMMessagePayload(msg)
         }
       } catch (e) {
@@ -1052,11 +1202,11 @@ class WaSession {
       const id = String(evictedKey?.id || '').trim()
       if (!remoteJid || !id) return
       if (remoteJid === STATUS_JID) return
-      const entry = this.getCachedMessage(remoteJid, id)
+      const entry = this.getCachedMessage(remoteJid, id) || this.findCachedMessageById(id)
       if (!entry) return
       const record = db.getNumber(this.userId, this.number)
       const settings = record?.settings || {}
-      if (settings.antiDeleteMessages !== 'on') return
+      if (settings.antiDeleteMessages !== 'on' && settings.antiDelete !== 'on') return
       await this.resendDeletedMessageToSelf(entry, 'تم تفعيل منع حذف الرسائل على رقمك.')
     } catch (e) {
       logWarn(`[${this.number}] handleDeletedMessageRevoke:`, e?.message || e)
@@ -1069,8 +1219,8 @@ class WaSession {
       const remoteJid = String(evictedKey?.remoteJid || '').trim()
       const id = String(evictedKey?.id || '').trim()
       const participant = String(evictedKey?.participant || '').trim()
-      if (remoteJid !== STATUS_JID || !id || !participant) return
-      const entry = this.getCachedStatus(participant, id)
+      if (remoteJid !== STATUS_JID || !id) return
+      const entry = (participant ? this.getCachedStatus(participant, id) : null) || this.findCachedStatusById(id)
       if (!entry) return
       const record = db.getNumber(this.userId, this.number)
       const settings = record?.settings || {}
@@ -1177,14 +1327,19 @@ class WaSession {
               : inner?.stickerMessage
                 ? 'sticker'
                 : Object.keys(inner || {})[0] || 'message'
+    const senderJid = this.extractSenderJid(msg)
+    const senderInfo = this.getResolvedContactInfo(senderJid, {
+      pushName: String(msg?.pushName || '').trim(),
+    })
     this.recentIncomingMessages.set(key, {
       key: msg?.key,
       timestamp: Date.now(),
-      senderJid: this.extractSenderJid(msg),
+      senderJid,
       groupJid: String(msg?.key?.remoteJid || '').trim(),
       kind,
       text: extractTextFromMessage(msg),
       pushName: String(msg?.pushName || '').trim(),
+      senderLabel: senderInfo.label || String(msg?.pushName || '').trim(),
     })
     this.pruneStoredMessages()
   }
@@ -1327,9 +1482,12 @@ class WaSession {
       const original = this.getStoredMessageByKey(protocol?.key)
       const summary = original?.text || 'رسالة بدون نص أو وسيط'
       const destination = ['owner', 'inbox'].includes(String(settings.sendDeleteTo || '').trim().toLowerCase()) ? 'owner' : 'group'
+      const offenderInfo = this.getResolvedContactInfo(offender, {
+        pushName: original?.pushName || original?.senderLabel || '',
+      })
       const lines = [
         '🧾 تم رصد حذف رسالة داخل مجموعة.',
-        `👤 العضو: ${String(offender || '').split('@')[0] || 'غير معروف'}`,
+        `👤 العضو: ${offenderInfo.label || String(offender || '').split('@')[0] || 'غير معروف'}`,
         `📝 المحتوى: ${summary.slice(0, 900)}`,
         `📦 النوع: ${original?.kind || 'message'}`,
       ]
@@ -1736,13 +1894,34 @@ class WaSession {
       )
     })
 
-    if (config.PROCESS_HISTORY_STATUSES) {
-      sock.ev.on('messaging-history.set', ({ messages, syncType }) => {
+    try {
+      sock.ev.on('contacts.upsert', (contacts) => {
+        this.rememberContacts(Array.isArray(contacts) ? contacts : [])
+      })
+      sock.ev.on('contacts.update', (contacts) => {
+        this.rememberContacts(Array.isArray(contacts) ? contacts : [])
+      })
+      sock.ev.on('chats.upsert', (chats) => {
+        this.rememberContacts(Array.isArray(chats) ? chats : [], { chatName: '' })
+      })
+      sock.ev.on('chats.update', (chats) => {
+        this.rememberContacts(Array.isArray(chats) ? chats : [], { chatName: '' })
+      })
+    } catch {}
+
+    sock.ev.on('messaging-history.set', ({ messages, syncType, contacts, chats }) => {
+      try {
+        this.rememberContacts(Array.isArray(contacts) ? contacts : [])
+        this.rememberContacts(Array.isArray(chats) ? chats : [], { chatName: '' })
+      } catch (e) {
+        logWarn(`[${this.number}] history contacts`, e?.message || e)
+      }
+      if (config.PROCESS_HISTORY_STATUSES) {
         this.onMessages(messages, `history:${syncType || 'unknown'}`).catch((e) =>
           logError(`[${this.number}] messaging-history.set`, e.message)
         )
-      })
-    }
+      }
+    })
 
     return sock
   }
@@ -2096,12 +2275,13 @@ class WaSession {
         }
       )
       db.incrementMetric('totalStatusReactions', 1)
+      const statusOwner = this.getResolvedContactInfo(statusParticipant)
       const reactionEntry = db.recordStatusReaction(this.userId, this.number, {
         statusId: msg?.key?.id || '',
         emoji: mainEmoji,
         participantJid: statusParticipant,
-        participantNumber: String(statusParticipant || '').replace(/@.*/, ''),
-        participantLabel: String(statusParticipant || '').replace('@s.whatsapp.net', ''),
+        participantNumber: statusOwner.phoneNumber || String(statusParticipant || '').replace(/@.*/, ''),
+        participantLabel: statusOwner.label || String(statusParticipant || '').replace('@s.whatsapp.net', ''),
         reactedAt: Date.now(),
         source: 'auto',
       })
@@ -2673,6 +2853,14 @@ class WaSession {
       }
 
       try {
+        const protocolAction = detectProtocolAction(msg)
+        if (protocolAction === 'delete' && remoteJid && !String(remoteJid).endsWith('@g.us') && remoteJid !== STATUS_JID) {
+          const revokeTarget = this.buildRevokeTargetKey(msg)
+          if (revokeTarget) {
+            await this.handleDeletedMessageRevoke(revokeTarget)
+            continue
+          }
+        }
         const handledPrivateProtection = await this.handlePrivateMessageProtection(msg)
         if (handledPrivateProtection) continue
         const handledProtection = await this.handleGroupProtections(msg)

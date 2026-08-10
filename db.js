@@ -950,6 +950,9 @@ function setPhoneSettings(userId, number, patch) {
         next[key] = String(value)
       }
     }
+    if (Object.prototype.hasOwnProperty.call(patch, 'antiDelete') && !Object.prototype.hasOwnProperty.call(patch, 'antiDeleteMessages')) {
+      next.antiDeleteMessages = String(patch.antiDelete)
+    }
   }
   n.settings = next
   if (next.statusCustomReact && (!n.emoji || !n.emoji.trim())) {
