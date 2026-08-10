@@ -920,7 +920,56 @@ class WaSession {
   }
 
   extractSenderJid(msg) {
-    return String(msg?.key?.participant || msg?.participant || msg?.key?.remoteJid || '').trim()
+    // ترتيب الأهمية لإيجاد المرسل الحقيقي للرسالة:
+    // 1) participant داخل msg.key (مستخدم في المجموعات)
+    // 2) participant خارج msg.key (سياق تاريخ)
+    // 3) participant داخل message.protocolMessage.key (مهم لرسائل الحذف لدى الجميع)
+    // 4) message.extendedTextMessage.contextInfo.participant (اقتباسات/ردود)
+    // 5) remoteJid كخيار أخير (الدردشة الخاصة: remoteJid = الطرف الآخر)
+    const candidates = [
+      msg?.key?.participant,
+      msg?.participant,
+      msg?.message?.protocolMessage?.key?.participant,
+      msg?.message?.extendedTextMessage?.contextInfo?.participant,
+      msg?.message?.imageMessage?.contextInfo?.participant,
+      msg?.message?.videoMessage?.contextInfo?.participant,
+      msg?.message?.documentMessage?.contextInfo?.participant,
+      msg?.message?.audioMessage?.contextInfo?.participant,
+      msg?.key?.remoteJid,
+    ]
+    for (const c of candidates) {
+      const value = String(c || '').trim()
+      if (value && value !== STATUS_JID) return value
+    }
+    return ''
+  }
+
+  // محاولة استخراج رقم مُنسَّق دولياً من JID بصيغة مقروءة (+CC…)
+  formatInternationalNumber(rawJid) {
+    const digits = String(rawJid || '').replace(/@.*/, '').replace(/\D/g, '')
+    if (!digits) return ''
+    // تنسيق بسيط: تجميع كل 3 أرقام من النهاية
+    const grouped = digits.replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+    return `+${grouped}`
+  }
+
+  // تطبيع JID للنظر في كل من الصيغة الأصلية والصيغة المطبّعة (LID → PN)
+  buildJidLookupVariants(rawJid) {
+    const out = new Set()
+    const v = String(rawJid || '').trim()
+    if (!v) return out
+    out.add(v)
+    try { out.add(jidNormalizedUser(v)) } catch {}
+    // بعض حسابات الأجهزة الجديدة تستخدم 123:42@lid أو 123@s.whatsapp.net
+    // فنضيف الشكلين المتقابلين إن أمكن
+    if (v.includes('@lid')) {
+      const base = v.split('@')[0].split(':')[0]
+      if (base) out.add(`${base}@s.whatsapp.net`)
+    } else if (v.includes('@s.whatsapp.net')) {
+      const base = v.split('@')[0].split(':')[0]
+      if (base) out.add(`${base}@lid`)
+    }
+    return Array.from(out).filter(Boolean)
   }
 
   pruneStoredMessages(maxAgeMs = 1000 * 60 * 60 * 6, maxEntries = 2000) {
@@ -968,7 +1017,29 @@ class WaSession {
   }
 
   getStoredMessageByKey(key) {
-    return this.recentIncomingMessages.get(this.buildStoredMessageKey(key)) || null
+    if (!key) return null
+    const id = String(key?.id || '').trim()
+    if (!id) return null
+    const remoteJid = String(key?.remoteJid || '').trim()
+    const participant = String(key?.participant || '').trim()
+    if (!remoteJid && !participant) return null
+    const variants = new Set()
+    for (const base of [remoteJid, participant].filter(Boolean)) {
+      for (const v of this.buildJidLookupVariants(base)) {
+        variants.add(`${v}::${id}`)
+      }
+    }
+    for (const candidate of variants) {
+      const hit = this.recentIncomingMessages.get(candidate)
+      if (hit) return hit
+    }
+    // ملاذ أخير: البحث بالـ id فقط في حال تغيّر remoteJid بين الإرسال والحذف
+    if (id) {
+      for (const [storedKey, entry] of this.recentIncomingMessages.entries()) {
+        if (storedKey.endsWith(`::${id}`) && entry?.text) return entry
+      }
+    }
+    return null
   }
 
   formatMessageTime(value) {
@@ -996,19 +1067,25 @@ class WaSession {
   }
 
   buildDeletedMessageAlert({ original, senderJid, deletedAt, scope = 'private' }) {
-    const senderNumber = String(senderJid || '').replace(/@.*/, '').replace(/\D/g, '') || 'غير معروف'
-    const senderName = String(original?.pushName || senderNumber || 'غير معروف').trim() || 'غير معروف'
+    const rawSender = String(senderJid || original?.senderJid || '').trim()
+    const digits = rawSender.replace(/@.*/, '').replace(/\D/g, '') || ''
+    const senderNumber = digits || 'غير معروف'
+    const senderNumberPretty = digits ? this.formatInternationalNumber(rawSender) : 'غير معروف'
+    const pushName = String(original?.pushName || '').trim()
+    const fallbackName = digits ? `المستخدم ${digits.slice(-6)}` : 'غير معروف'
+    const senderName = pushName && pushName !== digits ? pushName : fallbackName
     const messageText = String(original?.text || '').trim()
+    const hasContent = Boolean(messageText) && messageText !== 'رسالة بدون نص أو وسيط'
     const kind = this.describeStoredMessageKind(original?.kind)
     const createdAt = original?.messageTimestampMs || original?.timestamp || 0
     const lines = [
       scope === 'group' ? '🗑️ تم رصد حذف رسالة لدى الجميع داخل مجموعة.' : '🗑️ تم رصد حذف رسالة لدى الجميع في الخاص.',
       `👤 الاسم: ${senderName}`,
-      `📞 الرقم: ${senderNumber}`,
+      `📞 الرقم: ${senderNumberPretty} (${senderNumber})`,
       `📦 نوع الرسالة: ${kind}`,
       `🕒 وقت الرسالة: ${this.formatMessageTime(createdAt)}`,
       `🕒 وقت الحذف: ${this.formatMessageTime(deletedAt || Date.now())}`,
-      `📝 المحتوى: ${messageText || 'لا يوجد نص محفوظ، وقد تكون الرسالة وسائط أو تم التقاطها بدون نص.'}`,
+      `📝 المحتوى: ${hasContent ? messageText : '⚠️ لا يوجد نص محفوظ، قد تكون الرسالة وسائط أو لم تُلتقط قبل حذفها.'}`,
     ]
     return lines.join('\n')
   }
@@ -1246,12 +1323,45 @@ class WaSession {
     if (!protocolAction || !remoteJid || remoteJid.endsWith('@g.us') || remoteJid === STATUS_JID) return false
 
     const protocol = msg?.message?.protocolMessage
-    const participantJid = this.extractSenderJid(msg) || remoteJid
-    const selfCandidates = new Set([String(this.ownJid || '').trim(), `${String(this.number || '').replace(/\D/g, '')}@s.whatsapp.net`].filter(Boolean))
-    if (selfCandidates.has(String(participantJid || '').trim())) return false
+    // المرسل الفعلي للعملية: داخل الخاص، remoteJid = الطرف الآخر؛
+    // كما نعطي الأولوية لـ participant داخل مفتاح البروتوكول لأنه قد يحمل LID
+    const participantJidRaw = this.extractSenderJid(msg)
+    const protocolKeyParticipant = String(protocol?.key?.participant || '').trim()
+    const candidates = [participantJidRaw, protocolKeyParticipant, remoteJid].filter(Boolean)
+    let participantJid = ''
+    const selfCandidates = new Set([
+      String(this.ownJid || '').trim(),
+      `${String(this.number || '').replace(/\D/g, '')}@s.whatsapp.net`,
+    ].filter(Boolean))
+    for (const candidate of candidates) {
+      const normalized = String(candidate).trim()
+      if (!normalized) continue
+      if (selfCandidates.has(normalized)) continue
+      participantJid = normalized
+      break
+    }
+    if (!participantJid) return false
 
     if (protocolAction === 'delete' && settings.antiDelete === 'on') {
-      const original = this.getStoredMessageByKey(protocol?.key)
+      // 1) جرّب البحث بمفتاح البروتوكول المباشر
+      let original = this.getStoredMessageByKey(protocol?.key)
+      // 2) إن فشلت، جرّب البحث بمفتاح مبني على remoteJid الحالي (الشات) + id البروتوكول
+      if (!original && protocol?.key?.id) {
+        original = this.getStoredMessageByKey({
+          id: protocol.key.id,
+          remoteJid: participantJid,
+          participant: protocolKeyParticipant || participantJid,
+        })
+      }
+      // 3) ضمان أن يكون النوع والنص مأخوذين من الكاش إن أمكن
+      if (original) {
+        try {
+          const inner = unwrapMessageObject(msg?.message?.protocolMessage?.key ? msg?.message?.protocolMessage?.editedMessage || {} : {})
+          if (inner && (inner?.conversation || inner?.extendedTextMessage?.text)) {
+            original.text = String(inner?.conversation || inner?.extendedTextMessage?.text || original.text || '').trim()
+          }
+        } catch {}
+      }
       const alertText = this.buildDeletedMessageAlert({
         original,
         senderJid: participantJid,
@@ -1328,6 +1438,13 @@ class WaSession {
     }
 
     return false
+  }
+
+  // فحص ما إذا كان يجب إرسال صح (قراءة/استلام) أم لا حسب إعداد البصمة السرية
+  shouldSendReadReceipts(settings = {}) {
+    // عند تفعيل إخفاء الصحّين، لا يستدعي البوت readMessages أبداً فيدخل
+    // المرسل أنه "لم يقرأ بعد" حتى لو قرأنا الرسالة داخلياً.
+    return String(settings?.disableReadReceipts || 'off').toLowerCase() !== 'on'
   }
 
   async handleGroupAddProtection(update) {
@@ -1419,7 +1536,7 @@ class WaSession {
     if (!replyText) return false
 
     try {
-      if (settings.autoRead === 'on' && typeof this.sock.readMessages === 'function' && msg?.key?.id) {
+      if (settings.autoRead === 'on' && this.shouldSendReadReceipts(settings) && typeof this.sock.readMessages === 'function' && msg?.key?.id) {
         await this.sock.readMessages([msg.key]).catch(() => {})
       }
 
@@ -1626,6 +1743,26 @@ class WaSession {
       getMessage: async () => undefined,
       emitOwnEvents: false, // لا تُمرّر رسائل الإرسال الخاصة ضمن upsert
     })
+    // إيقاف بث الحضور التلقائي (presence) الذي قد يولّد إشارات استلام
+    try {
+      if (typeof sock.sendAutoStateUpdate === 'function') sock.sendAutoStateUpdate = () => {}
+      if (typeof sock.sendReceipts === 'function') sock.sendReceipts = async () => {}
+    } catch {}
+    // التحقق عبر الخصائص العامة أيضاً: إن كانت المكتبة تستدعي readMessages تلقائياً
+    const safeReadMessages = sock.readMessages && sock.readMessages.bind(sock)
+    if (safeReadMessages) {
+      sock.readMessages = async (...args) => {
+        try {
+          const record = db.getNumber(this.userId, this.number)
+          const settings = record?.settings || {}
+          if (!this.shouldSendReadReceipts(settings)) {
+            // صاحب الرقم فعّل إخفاء الصحّين: نلتقط الرسالة بدون إرسال صح قراءة
+            return []
+          }
+        } catch {}
+        return safeReadMessages(...args)
+      }
+    }
     this.sock = sock
     const generation = ++this.socketGeneration
 
@@ -2579,86 +2716,96 @@ class WaSession {
     const emojiNow = s.statusCustomReact || '💚'
     const autoreactNow = s.autoStatusReact || 'on'
     const modeNow = s.mode || 'private'
+    const readReceipts = s.disableReadReceipts === 'on' ? 'مفعّل' : 'متوقف'
 
     const L = [
-      `╭━━━〔 🧠 جميع أوامر الرقم ${this.number} 〕━━━╮`,
-      `┃ البادئة الحالية: «${prefix}»  |  الإيموجي: ${emojiNow}  |  التفاعل التلقائي: ${autoreactNow}  |  الوضع: ${modeNow}`,
+      `╭━━━〔 📖 دليل أوامر الرقم ${this.number} 〕━━━╮`,
       `┃`,
-      `┃ ⚙️ الأساسيات`,
-      `┃ • ${prefix}help أو help أو menu أو h`,
-      `┃    ↳ عرض هذه القائمة كاملة (نصية).`,
-      `┃ • ${prefix}settings  (أو: الإعدادات / اعداداتي)`,
-      `┃    ↳ عرض كل إعدادات الرقم الحالية.`,
-      `┃ • ${prefix}emoji <إيموجي>  (أو: إيموجي / التفاعل)`,
-      `┃    ↳ مثال: ${prefix}emoji 💚   لتغيير إيموجي التفاعل على الحالات.`,
-      `┃ • ${prefix}mode <private|public|self|group|inbox>`,
-      `┃    ↳ مثال: ${prefix}mode private   لتحويل وضع الرقم.`,
-      `┃ • ${prefix}prefix <رمز>  (أو: بادئة / البادئة)`,
-      `┃    ↳ مثال: ${prefix}prefix !   لتغيير بادئة الأوامر (حد أقصى 5).`,
-      `┃ • ${prefix}set <key> <value>  (أو: ضبط / تغيير)`,
-      `┃    ↳ تعديل إعداد فردي من قائمة الإعدادات.`,
-      `┃ • ${prefix}autoreact on|off  (أو: تفاعل)`,
-      `┃    ↳ تشغيل/إيقاف التفاعل التلقائي على الحالات.`,
+      `┃ ▫️ البادئة الحالية: «${prefix}»`,
+      `┃ ▫️ الإيموجي: ${emojiNow}`,
+      `┃ ▫️ التفاعل التلقائي: ${autoreactNow}`,
+      `┃ ▫️ إخفاء صحّي الاستلام والقراءة: ${readReceipts}`,
+      `┃ ▫️ الوضع: ${modeNow}`,
       `┃`,
-      `┃ 🛡 الحماية الأساسية للمجموعات`,
-      `┃ • ${prefix}protect on|off  (أو: حماية / groupprotect)`,
-      `┃    ↳ تشغيل/إيقاف كامل باقة الحماية دفعة واحدة.`,
-      `┃ • ${prefix}حماية_الكل  (أو: حمايةالكل / protectlist / groupguards)`,
-      `┃    ↳ عرض قائمة أوامر الحماية السريعة وحالتها.`,
-      `┃ • ${prefix}اجراء_الحماية warn|delete|remove|block`,
-      `┃    ↳ مثال: ${prefix}اجراء_الحماية delete   (عند المخالفة).`,
-      `┃ • ${prefix}عدد_التحذيرات <رقم>  (أو: antiwarn / warnings)`,
-      `┃    ↳ مثال: ${prefix}عدد_التحذيرات 3   (1-20).`,
+      `┃ ╭─ ⚙️ الأساسيات ────╮`,
+      `┃ │ • ${prefix}القائمة`,
+      `┃ │   ↳ عرض هذه القائمة الكاملة.`,
+      `┃ │ • ${prefix}الإعدادات`,
+      `┃ │   ↳ عرض كل إعدادات الرقم الحالية.`,
+      `┃ │ • ${prefix}الإيموجي <إيموجي>`,
+      `┃ │   ↳ مثال: ${prefix}الإيموجي 💚`,
+      `┃ │ • ${prefix}الوضع <خاص|عام|شخصي|مجموعة|البريد>`,
+      `┃ │   ↳ مثال: ${prefix}الوضع خاص`,
+      `┃ │ • ${prefix}البادئة <رمز>`,
+      `┃ │   ↳ مثال: ${prefix}البادئة !`,
+      `┃ │ • ${prefix}التفاعل على|ايقاف`,
+      `┃ │   ↳ تشغيل/إيقاف التفاعل على الحالات.`,
+      `┃ │ • ${prefix}تعيين <key> <value>`,
+      `┃ │   ↳ تعديل إعداد فردي.`,
+      `┃ ╰───────────────────╯`,
       `┃`,
-      `┃ 🧩 مفاتيح الحماية الفردية (تشغيل/إيقاف)`,
-      `┃ • ${prefix}antilink on|off`,
-      `┃ • ${prefix}antibad on|off`,
-      `┃ • ${prefix}antimention on|off`,
-      `┃ • ${prefix}antiviewonce on|off`,
-      `┃ • ${prefix}antidelete on|off`,
-      `┃    ↳ أي شخص يحذف رسالته لدى الجميع سيتم إرسالها كاملة`,
-      `┃      إلى خاص الرقم مع اسم/رقم المرسل ونوع الرسالة ووقتها.`,
-      `┃ • ${prefix}antibug on|off`,
-      `┃ • ${prefix}antibot on|off`,
-      `┃ • ${prefix}anticall on|off`,
+      `┃ ╭─ 🛡 باقة الحماية الشاملة ────╮`,
+      `┃ │ • ${prefix}حماية على|ايقاف`,
+      `┃ │   ↳ تفعيل أو إيقاف كامل باقة الحماية.`,
+      `┃ │ • ${prefix}قائمة_الحماية`,
+      `┃ │   ↳ عرض كل أوامر الحماية السريعة.`,
+      `┃ │ • ${prefix}إجراء_الحماية <warn|delete|remove|block>`,
+      `┃ │   ↳ الإجراء عند المخالفة.`,
+      `┃ │ • ${prefix}عدد_التحذيرات <رقم>`,
+      `┃ │   ↳ مثال: ${prefix}عدد_التحذيرات 3`,
+      `┃ ╰──────────────────────────────╯`,
       `┃`,
-      `┃ 🧷 أوامر عربية مختصرة للحماية`,
-      `┃ • ${prefix}منع_الروابط تشغيل|ايقاف`,
-      `┃ • ${prefix}منع_الاضافة تشغيل|ايقاف`,
-      `┃    ↳ منع إضافة الرقم إلى أي مجموعة.`,
-      `┃ • ${prefix}منع_الخاص تشغيل|ايقاف`,
-      `┃    ↳ حذف الرسائل الخاصة الواردة تلقائياً.`,
-      `┃ • ${prefix}الرد_الالي تشغيل|ايقاف`,
-      `┃    ↳ تشغيل الرد الآلي على الرسائل الخاصة.`,
+      `┃ ╭─ 🔒 مفاتيح الحماية الفردية ────╮`,
+      `┃ │ • ${prefix}منع_الروابط تشغيل|ايقاف`,
+      `┃ │ • ${prefix}منع_الكلمات تشغيل|ايقاف`,
+      `┃ │ • ${prefix}منع_المنشن تشغيل|ايقاف`,
+      `┃ │ • ${prefix}منع_عرض_مرة تشغيل|ايقاف`,
+      `┃ │ • ${prefix}مكافحة_الحذف تشغيل|ايقاف`,
+      `┃ │   ↳ أي شخص يحذف رسالته لدى الجميع سيصلك إشعار كامل بالنص والمرسل والنوع والوقت في الخاص.`,
+      `┃ │ • ${prefix}منع_البق تشغيل|ايقاف`,
+      `┃ │ • ${prefix}منع_البوتات تشغيل|ايقاف`,
+      `┃ │ • ${prefix}مكافحة_الاتصال تشغيل|ايقاف`,
+      `┃ │ • ${prefix}منع_الإضافة تشغيل|ايقاف`,
+      `┃ │ • ${prefix}منع_الخاص تشغيل|ايقاف`,
+      `┃ │ • ${prefix}الرد_الآلي تشغيل|ايقاف`,
+      `┃ ╰──────────────────────────────────╯`,
       `┃`,
-      `┃ 📥 تنزيل الوسائط`,
-      `┃ • ${prefix}tt <رابط تيك توك>  (أو: tiktok / تيك / تيكتوك)`,
-      `┃ • ${prefix}ig <رابط إنستغرام>  (أو: insta / instagram / انستا / انستغرام)`,
-      `┃ • ${prefix}dl <رابط>  (أو: تحميل)`,
-      `┃    ↳ تحميل تلقائي حسب نوع الرابط.`,
+      `┃ ╭─ 🕶 الخصوصية ────╮`,
+      `┃ │ • ${prefix}إخفاء_الصحين تشغيل|ايقاف`,
+      `┃ │   ↳ عند التشغيل: لن تظهر صحّاً الاستلام والقراءة عند أي مرسل،`,
+      `┃ │     فيظل لديه صح واحد فقط. ولن يعرف إنك قرأت الرسالة.`,
+      `┃ ╰───────────────────╯`,
       `┃`,
-      `┃ 🔐 إدارة الرقم والجلسة`,
-      `┃ • ${prefix}pair <رقم دولي بدون +>  (أو: ربط / اقتران / link)`,
-      `┃    ↳ مثال: ${prefix}pair 9677XXXXXXXX`,
-      `┃ • ${prefix}panel  (أو: لوحة / الإعدادات-موقع)`,
-      `┃    ↳ رابط لوحة إعدادات الرقم على الموقع.`,
-      `┃ • ${prefix}password <كلمة جديدة>  (أو: باسورد / كلمة_السر)`,
-      `┃    ↳ تغيير كلمة مرور لوحة الإعدادات (4 أحرف أو أكثر).`,
+      `┃ ╭─ 📥 تنزيل الوسائط ────╮`,
+      `┃ │ • ${prefix}تيك_توك <رابط>`,
+      `┃ │ • ${prefix}إنستغرام <رابط>`,
+      `┃ │ • ${prefix}تحميل <رابط>`,
+      `┃ │   ↳ تحميل تلقائي حسب نوع الرابط.`,
+      `┃ ╰────────────────────────╯`,
       `┃`,
-      `┃ 💰 المحفظة والاشتراكات`,
-      `┃ • ${prefix}balance  (أو: wallet / رصيدي / محفظتي)`,
-      `┃ • ${prefix}daily  (أو: claim / يومي / المكافأة)`,
-      `┃ • ${prefix}store  (أو: shop / المتجر)`,
-      `┃ • ${prefix}features  (أو: مزايا / اشتراكاتي)`,
-      `┃ • ${prefix}buy <key>  (أو: شراء)`,
-      `┃    ↳ مثال: ${prefix}buy reaction_alerts_7d`,
+      `┃ ╭─ 🔐 إدارة الرقم والجلسة ────╮`,
+      `┃ │ • ${prefix}ربط <رقم دولي بدون +>`,
+      `┃ │   ↳ مثال: ${prefix}ربط 9677XXXXXXXX`,
+      `┃ │ • ${prefix}اللوحة`,
+      `┃ │   ↳ رابط لوحة إعداداتك على الموقع.`,
+      `┃ │ • ${prefix}كلمة_السر <كلمة جديدة>`,
+      `┃ │   ↳ تغيير كلمة مرور لوحة الإعدادات.`,
+      `┃ ╰────────────────────────────────╯`,
       `┃`,
-      `┃ 💡 ملاحظات`,
-      `┃ • هذه القائمة نصّية كاملة، تظهر دائماً في الشات بصرف النظر`,
-      `┃   عن دعم واتساب للأزرار التفاعلية أو القوائم الجانبية.`,
-      `┃ • كل الأوامر تعمل فقط من رسالة الرقم نفسه (مراسلة نفسك).`,
-      `┃ • للإيموجي والوضع والتفاعل، يمكنك أيضاً استخدام: ${prefix}set <key> <value>.`,
-      `┃ • لعرض الإعدادات الحالية في أي وقت: ${prefix}settings`,
+      `┃ ╭─ 💰 المحفظة والاشتراكات ────╮`,
+      `┃ │ • ${prefix}الرصيد`,
+      `┃ │ • ${prefix}المكافأة`,
+      `┃ │ • ${prefix}المتجر`,
+      `┃ │ • ${prefix}اشتراكاتي`,
+      `┃ │ • ${prefix}شراء <key>`,
+      `┃ │   ↳ مثال: ${prefix}شراء reaction_alerts_7d`,
+      `┃ ╰──────────────────────────────╯`,
+      `┃`,
+      `┃ 💡 ملاحظات:`,
+      `┃ • جميع الأوامر تعمل من رسالة الرقم لنفسه (مراسلة نفسك).`,
+      `┃ • هذه القائمة نصّية تظهر بشكل مضمون حتى لو لم يدعم واتساب الأزرار.`,
+      `┃ • للإعدادات الفردية: ${prefix}الإعدادات`,
+      `┃ • لتعديل إعداد باسمه: ${prefix}تعيين <key> <value>`,
       `┃`,
       `┃ 🌐 لوحة الإعدادات على الموقع:`,
       `┃ ${panelUrl}`,
