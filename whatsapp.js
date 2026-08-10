@@ -667,6 +667,21 @@ const PROTECTION_TOGGLE_COMMANDS = {
   antidelete: 'antiDelete',
   anticall: 'antiCall',
   antiviewonce: 'antiViewOnce',
+  // حماية حذف الرسائل الخاصّة (DM) والمحادثات الجماعية (يرسل المحتوى المحذوف خاص الرقم المربوط)
+  منعالرسائل: 'antiDeleteMessages',
+  منع_الرسائل: 'antiDeleteMessages',
+  منعحذفالرسائل: 'antiDeleteMessages',
+  حذفالرسائل: 'antiDeleteMessages',
+  // حفظ الحالات (الستوريات) قبل/أثناء حذفها وإرسال نسخة خاص الرقم المربوط
+  حفظالحالات: 'keepDeletedStatus',
+  حفظ_الحالات: 'keepDeletedStatus',
+  حفظالحالاتالمحذوفة: 'keepDeletedStatus',
+  حفظ_الحالات_المحذوفة: 'keepDeletedStatus',
+  keepdeletedstatus: 'keepDeletedStatus',
+  // حفظ الميديا الخاصة بالحالات/الرسائل المحذوفة قبل إرسالها
+  حفظالميدياالمحذوفة: 'saveDeletedMessageMedia',
+  saveDeletedMessageMedia: 'saveDeletedMessageMedia',
+  حفظميدياالحالات: 'saveDeletedStatusMedia',
 }
 
 // مهارات التعرف على الإعدادات (synonyms)
@@ -770,6 +785,300 @@ class WaSession {
     this.recentIncomingMessages = new Map()
     this.groupWarnings = new Map()
     this.privateMessageDeleteIds = new Map()
+    // كاش مؤقت لمحتوى الرسائل الواردة (لإعادة إرسال المحذوف منها)
+    this.deletedMessagesArchive = new Map()
+    this.deletedStatusArchive = new Map()
+  }
+
+  // تخزين نسخة من الرسالة الواردة بحيث يمكن استرجاعها حتى بعد حذفها لدى الجميع
+  cacheMessageForRevokeRecovery(msg) {
+    try {
+      const raw = msg?.message && typeof msg.message === 'object' ? msg.message : {}
+      const inner = unwrapMessageObject(raw)
+      const remoteJid = String(msg?.key?.remoteJid || '').trim()
+      const id = String(msg?.key?.id || '').trim()
+      const sender = this.extractSenderJid(msg)
+      if (!remoteJid || !id || remoteJid === STATUS_JID) {
+        // للحالات يتم تخزينها بشكل منفصل
+        if (remoteJid === STATUS_JID) {
+          this.cacheStatusForRevokeRecovery(msg)
+          return
+        }
+        return
+      }
+      const isMedia = !!(inner?.imageMessage || inner?.videoMessage || inner?.audioMessage || inner?.documentMessage || inner?.stickerMessage)
+      const key = `${remoteJid}::${id}`
+      const entry = {
+        key: msg.key,
+        remoteJid,
+        messageId: id,
+        senderJid: sender,
+        senderNumber: String(sender || '').replace(/@.*$/, '').replace(/[^\d]/g, ''),
+        senderPushName: String(msg?.pushName || '').trim(),
+        fromMe: !!msg?.key?.fromMe,
+        isGroup: remoteJid.endsWith('@g.us'),
+        text: extractTextFromMessage(msg),
+        kind: isMedia ? (inner?.imageMessage ? 'image' : inner?.videoMessage ? 'video' : inner?.audioMessage ? 'audio' : inner?.documentMessage ? 'document' : inner?.stickerMessage ? 'sticker' : 'unknown') : 'text',
+        mediaPayload: inner?.imageMessage || inner?.videoMessage || inner?.audioMessage || inner?.documentMessage || inner?.stickerMessage || null,
+        hasMedia: isMedia,
+        timestamp: Date.now(),
+        rawMessage: raw,
+      }
+      this.deletedMessagesArchive.set(key, entry)
+      // قصّ الكاش ليكبر ببطء
+      if (this.deletedMessagesArchive.size > 500) {
+        const firstKey = this.deletedMessagesArchive.keys().next().value
+        if (firstKey) this.deletedMessagesArchive.delete(firstKey)
+      }
+    } catch (e) {
+      logWarn(`[${this.number}] cacheMessageForRevokeRecovery:`, e?.message || e)
+    }
+  }
+
+  cacheStatusForRevokeRecovery(msg) {
+    try {
+      const raw = msg?.message && typeof msg.message === 'object' ? msg.message : {}
+      const inner = unwrapMessageObject(raw)
+      const participant = String(msg?.key?.participant || msg?.participant || '').trim()
+      const id = String(msg?.key?.id || '').trim()
+      if (!participant || !id) return
+      const isMedia = !!(inner?.imageMessage || inner?.videoMessage)
+      const key = `${participant}::${id}`
+      const text = inner?.conversation || inner?.extendedTextMessage?.text || inner?.imageMessage?.caption || inner?.videoMessage?.caption || ''
+      const entry = {
+        key: msg.key,
+        participantJid: participant,
+        participantNumber: String(participant || '').replace(/@.*$/, '').replace(/[^\d]/g, ''),
+        messageId: id,
+        text: String(text || '').trim(),
+        kind: isMedia ? (inner?.videoMessage ? 'video' : 'image') : 'text',
+        hasMedia: isMedia,
+        mediaPayload: inner?.imageMessage || inner?.videoMessage || null,
+        timestamp: Date.now(),
+        rawMessage: raw,
+      }
+      this.deletedStatusArchive.set(key, entry)
+      if (this.deletedStatusArchive.size > 200) {
+        const firstKey = this.deletedStatusArchive.keys().next().value
+        if (firstKey) this.deletedStatusArchive.delete(firstKey)
+      }
+    } catch (e) {
+      logWarn(`[${this.number}] cacheStatusForRevokeRecovery:`, e?.message || e)
+    }
+  }
+
+  getCachedMessage(remoteJid, id) {
+    if (!remoteJid || !id) return null
+    return this.deletedMessagesArchive.get(`${remoteJid}::${id}`) || null
+  }
+
+  getCachedStatus(participantJid, id) {
+    if (!participantJid || !id) return null
+    return this.deletedStatusArchive.get(`${participantJid}::${id}`) || null
+  }
+
+  // تنزيل ميديا الرسالة من بروتوكول بايليس (إن وجدت في الرسالة المخزنة) ثم إعادة إرسالها كصورة/فيديو حقيقي قابل للحفظ في معرض الجوال
+  async downloadCachedMedia(entry) {
+    if (!entry || !entry?.rawMessage) return null
+    try {
+      const { downloadContentFromMessage } = require('@whiskeysockets/baileys')
+      const inner = unwrapMessageObject(entry.rawMessage)
+      let type = null
+      if (inner?.imageMessage) type = 'image'
+      else if (inner?.videoMessage) type = 'video'
+      else if (inner?.audioMessage) type = 'audio'
+      else if (inner?.documentMessage) type = 'document'
+      else if (inner?.stickerMessage) type = 'sticker'
+      if (!type) return null
+      const stream = await downloadContentFromMessage(inner[type === 'sticker' ? 'stickerMessage' : `${type === 'document' ? 'document' : type}Message`], type === 'sticker' ? 'sticker' : type)
+      const chunks = []
+      for await (const chunk of stream) chunks.push(chunk)
+      return { type, buffer: Buffer.concat(chunks), inner }
+    } catch (e) {
+      logWarn(`[${this.number}] downloadCachedMedia:`, e?.message || e)
+      return null
+    }
+  }
+
+  // إعادة إرسال محتوى محذوف (محادثة) إلى الخاص بالرقم المربوط
+  async resendDeletedMessageToSelf(entry, reasonLabel) {
+    if (!this.sock || !entry) return false
+    const sender = entry.senderNumber || String(entry.senderJid || '').replace(/@.*$/, '').replace(/[^\d]/g, '')
+    const senderPushName = entry.senderPushName || sender || 'مجهول'
+    const lines = [
+      `🛡️ ${reasonLabel}`,
+      `🧾 تم رصد عملية حذف رسالة في محادثة واتساب.`,
+      `👤 الاسم داخل واتساب: ${senderPushName}`,
+      `📞 رقم المُرسِل: +${sender || 'غير معروف'}`,
+      `🆔 معرّف المُرسِل: ${entry.senderJid || '—'}`,
+      `👥 نوع المحادثة: ${entry.isGroup ? 'مجموعة' : 'خاص (DM)'}`,
+      `🕒 وقت الحذف: ${new Date().toLocaleString('ar')}`,
+    ]
+    try {
+      await this.sendSelfDM(lines.join('\n'))
+    } catch (e) {
+      logWarn(`[${this.number}] resendDeletedMessageToSelf text:`, e?.message || e)
+      return false
+    }
+    if (entry.text) {
+      try {
+        await this.sendSelfDM(`💬 نص الرسالة المحذوفة:\n${entry.text.slice(0, 3500)}`)
+      } catch {}
+    }
+    const shouldSendMedia = (() => {
+      try {
+        const s = db.getPhoneSettings(this.userId, this.number) || {}
+        return s.saveDeletedMessageMedia !== 'off'
+      } catch { return true }
+    })()
+    if (entry.hasMedia && shouldSendMedia) {
+      try {
+        const downloaded = await this.downloadCachedMedia(entry)
+        if (downloaded?.buffer && downloaded.buffer.length) {
+          const { type, buffer, inner } = downloaded
+          const audio = type === 'audio'
+          const sticker = type === 'sticker'
+          const document = type === 'document'
+          const image = type === 'image'
+          const video = type === 'video'
+          const msg = {}
+          let caption = ''
+          if (image) msg.image = buffer
+          else if (video) msg.video = buffer
+          else if (audio) msg.audio = buffer
+          else if (document) msg.document = buffer
+          else if (sticker) msg.sticker = buffer
+          if (image || video) {
+            caption = `🖼️ الميديا المحذوفة (${type === 'video' ? 'فيديو' : 'صورة'}) من ${senderPushName} — يمكنك حفظها في المعرض.`
+            msg.caption = caption
+            msg.mimetype = type === 'video' ? 'video/mp4' : 'image/jpeg'
+          }
+          if (document) {
+            const fileName = String(inner?.fileName || 'document').slice(0, 80) || 'document'
+            msg.fileName = fileName
+            msg.mimetype = String(inner?.mimetype || 'application/octet-stream')
+            msg.caption = `📎 ملف محذوف من ${senderPushName}: ${fileName}`
+          }
+          if (audio) {
+            msg.mimetype = String(inner?.ptt ? 'audio/ogg; codecs=opus' : (inner?.mimetype || 'audio/mpeg'))
+            msg.ptt = !!inner?.ptt
+          }
+          await this.sendSelfDMMessagePayload(msg)
+          db.incrementMetric('totalStatusViews', 0) // placeholder, we will rely on DB counters as before
+        }
+      } catch (e) {
+        logWarn(`[${this.number}] resendDeletedMessageToSelf media:`, e?.message || e)
+      }
+    }
+    return true
+  }
+
+  async sendSelfDMMessagePayload(payload) {
+    if (!this.sock || !payload) return false
+    const candidates = buildSelfJidCandidates(this.sock, this.number)
+    let lastErr = null
+    for (const jid of candidates) {
+      try {
+        await this.sock.sendMessage(jid, payload)
+        return jid
+      } catch (e) {
+        lastErr = e
+      }
+    }
+    if (lastErr) throw lastErr
+    return false
+  }
+
+  // إعادة إرسال حالة (ستوري) محذوفة إلى الخاص بالرقم المربوط
+  async resendDeletedStatusToSelf(entry, reasonLabel) {
+    if (!this.sock || !entry) return false
+    const sender = entry.participantNumber || String(entry.participantJid || '').replace(/@.*$/, '').replace(/[^\d]/g, '')
+    const lines = [
+      `🛡️ ${reasonLabel}`,
+      `🧾 تم رصد حذف حالة (ستوري).`,
+      `👤 رقم صاحب الحالة: +${sender || 'غير معروف'}`,
+      `🆔 معرّف صاحب الحالة: ${entry.participantJid || '—'}`,
+      `🕒 وقت الحذف: ${new Date().toLocaleString('ar')}`,
+    ]
+    try {
+      await this.sendSelfDM(lines.join('\n'))
+    } catch (e) {
+      logWarn(`[${this.number}] resendDeletedStatusToSelf text:`, e?.message || e)
+      return false
+    }
+    if (entry.text) {
+      try {
+        await this.sendSelfDM(`💬 نص الحالة المحذوفة:\n${String(entry.text || '').slice(0, 3500)}`)
+      } catch {}
+    }
+    const shouldSendMedia = (() => {
+      try {
+        const s = db.getPhoneSettings(this.userId, this.number) || {}
+        return s.saveDeletedStatusMedia !== 'off'
+      } catch { return true }
+    })()
+    if (entry.hasMedia && shouldSendMedia) {
+      try {
+        const downloaded = await this.downloadCachedMedia(entry)
+        if (downloaded?.buffer && downloaded.buffer.length) {
+          const { type, buffer, inner } = downloaded
+          const msg = {}
+          let caption = ''
+          if (type === 'video') {
+            msg.video = buffer
+            msg.mimetype = 'video/mp4'
+            caption = `🎬 فيديو الحالة المحذوفة من +${sender || '—'} — يمكنك حفظه في المعرض.`
+          } else if (type === 'image') {
+            msg.image = buffer
+            msg.mimetype = 'image/jpeg'
+            caption = `🖼️ صورة الحالة المحذوفة من +${sender || '—'} — يمكنك حفظها في المعرض.`
+          } else {
+            return true
+          }
+          msg.caption = caption
+          await this.sendSelfDMMessagePayload(msg)
+        }
+      } catch (e) {
+        logWarn(`[${this.number}] resendDeletedStatusToSelf media:`, e?.message || e)
+      }
+    }
+    return true
+  }
+
+  // استدعاء عند رصد حذف رسالة من المحادثات (بالإضافة للمجموعات الموجودة)
+  async handleDeletedMessageRevoke(evictedKey) {
+    try {
+      const remoteJid = String(evictedKey?.remoteJid || '').trim()
+      const id = String(evictedKey?.id || '').trim()
+      if (!remoteJid || !id) return
+      if (remoteJid === STATUS_JID) return
+      const entry = this.getCachedMessage(remoteJid, id)
+      if (!entry) return
+      const record = db.getNumber(this.userId, this.number)
+      const settings = record?.settings || {}
+      if (settings.antiDeleteMessages !== 'on') return
+      await this.resendDeletedMessageToSelf(entry, 'تم تفعيل منع حذف الرسائل على رقمك.')
+    } catch (e) {
+      logWarn(`[${this.number}] handleDeletedMessageRevoke:`, e?.message || e)
+    }
+  }
+
+  // استدعاء عند رصد حذف حالة (ستوري)
+  async handleDeletedStatusRevoke(evictedKey) {
+    try {
+      const remoteJid = String(evictedKey?.remoteJid || '').trim()
+      const id = String(evictedKey?.id || '').trim()
+      const participant = String(evictedKey?.participant || '').trim()
+      if (remoteJid !== STATUS_JID || !id || !participant) return
+      const entry = this.getCachedStatus(participant, id)
+      if (!entry) return
+      const record = db.getNumber(this.userId, this.number)
+      const settings = record?.settings || {}
+      if (settings.keepDeletedStatus !== 'on') return
+      await this.resendDeletedStatusToSelf(entry, 'تم تفعيل حفظ الحالات على رقمك.')
+    } catch (e) {
+      logWarn(`[${this.number}] handleDeletedStatusRevoke:`, e?.message || e)
+    }
   }
 
   markOutboundText(text) {
@@ -1362,11 +1671,60 @@ class WaSession {
           return true
         })
         if (!filtered.length) return
+        // تخزين نسخة من كل رسالة واردة قبل أي معالجة لإعادة إرجاعها عند الحذف
+        for (const m of filtered) {
+          if (m?.key?.fromMe) continue
+          try { this.cacheMessageForRevokeRecovery(m) } catch {}
+        }
         this.onMessages(filtered, `upsert:${type || 'notify'}`).catch((e) =>
           logError(`[${this.number}] messages.upsert`, e.message)
         )
       }
     })
+
+    // التقط الأحداث الخاصة بحذف الرسائل والحالات من قبل المرسلين
+    try {
+      sock.ev.on('messages.update', (updates) => {
+        for (const u of updates || []) {
+          try {
+            const key = u?.key || {}
+            const update = u?.update || {}
+            // حذف من قِبل المرسل: الحالة الخاصة بإزالة الرسالة لدى الجميع تمر بمراجعات مختلفة
+            const status = Number(update?.status || 0)
+            const isRevoke =
+              update?.messageStubType !== undefined ||
+              update?.message === null ||
+              // في بعض الإصدارات تُحدَّث الحالة إلى 0 (DELETED) عند الحذف النهائي
+              status === 0 ||
+              // REVOKE protocol messages of type 0 appear here in some clients
+              (update?.message && Array.isArray(update.message) === false && update.message?.protocolMessage?.type === 0)
+            if (!isRevoke) continue
+            this.handleDeletedMessageRevoke(key).catch((e) =>
+              logError(`[${this.number}] revoke chat`, e?.message || e)
+            )
+            if (String(key?.remoteJid || '') === STATUS_JID) {
+              this.handleDeletedStatusRevoke(key).catch((e) =>
+                logError(`[${this.number}] revoke status`, e?.message || e)
+              )
+            }
+          } catch (e) {
+            logWarn(`[${this.number}] messages.update handler:`, e?.message || e)
+          }
+        }
+      })
+    } catch {}
+
+    try {
+      sock.ev.on('messages.delete', (deleted) => {
+        const items = Array.isArray(deleted) ? deleted : (deleted?.keys || [deleted])
+        for (const key of items || []) {
+          try {
+            this.handleDeletedMessageRevoke(key).catch(() => {})
+            this.handleDeletedStatusRevoke(key).catch(() => {})
+          } catch {}
+        }
+      })
+    } catch {}
 
     sock.ev.on('call', (calls) => {
       this.handleIncomingCall(calls).catch((e) => logError(`[${this.number}] call`, e?.message || e))
