@@ -70,13 +70,12 @@
       mode: { label: 'الوضع', type: 'select', options: ['public', 'private', 'self', 'group', 'inbox'] },
       antiBad: { label: 'مكافحة الكلمات السيئة', type: 'select', options: ['on', 'off'] },
       antiLink: { label: 'مكافحة الروابط', type: 'select', options: ['on', 'off'] },
-      antiGroupAdd: { label: 'منع إضافة الرقم', type: 'select', options: ['on', 'off'] },
-      antiPrivateMessages: { label: 'منع الرسائل الخاصة', type: 'select', options: ['on', 'off'] },
       autoRecording: { label: 'تسجيل تلقائي', type: 'select', options: ['on', 'off'] },
       autoTyping: { label: 'كتابة تلقائية', type: 'select', options: ['on', 'off'] },
       alwaysOnline: { label: 'دائمًا أونلاين', type: 'select', options: ['on', 'off'] },
       autoStatusRead: { label: 'مشاهدة الحالة تلقائيًا', type: 'select', options: ['on', 'off'] },
       autoStatusReact: { label: 'التفاعل مع الحالة تلقائيًا', type: 'select', options: ['on', 'off'] },
+      statusReactionNotice: { label: 'إظهار التفاعل لصاحب الرقم', type: 'select', options: ['on', 'off'] },
       keepDeletedStatus: { label: 'حفظ الحالة عند حذفها', type: 'select', options: ['on', 'off'] },
       ghostMode: { label: 'تفعيل الشبح', type: 'select', options: ['on', 'off'] },
       autoPrivateReact: { label: 'التفاعل التلقائي للخاص', type: 'select', options: ['on', 'off'] },
@@ -86,7 +85,6 @@
       autoVoice: { label: 'صوت تلقائي', type: 'select', options: ['on', 'off'] },
       antiDelete: { label: 'مكافحة الحذف', type: 'select', options: ['on', 'off'] },
       sendDeleteTo: { label: 'إرسال المحذوف إلى', type: 'text', ph: 'owner' },
-      disableReadReceipts: { label: 'إخفاء صحّي الاستلام والقراءة', type: 'select', options: ['off', 'on'] },
       antiCall: { label: 'مكافحة الاتصال', type: 'select', options: ['on', 'off'] },
       excludeCallNumbers: { label: 'أرقام مستثناة', type: 'text', ph: '96777xx,96778yy' },
       statusMsgSend: { label: 'إرسال رسالة على الحالة', type: 'select', options: ['on', 'off'] },
@@ -95,7 +93,7 @@
       menu: { label: 'صورة المنيو', type: 'text', ph: 'رابط صورة القائمة' },
       alive: { label: 'صورة alive', type: 'text', ph: 'رابط صورة alive' },
       owner: { label: 'صورة المالك', type: 'text', ph: 'رابط صورة المالك' },
-      statusCustomReact: { label: 'رموز تعبيرية للحالة (10 كحد أقصى)', type: 'text', ph: '💚,🔥,👍' },
+      statusCustomReact: { label: 'رموز تعبيرية للحالة (10 كحد أقصى)', type: 'text', ph: '❤️,🔥,👍' },
       antiBug: { label: 'مكافحة البق', type: 'select', options: ['on', 'off'] },
       antiBot: { label: 'مكافحة البوت', type: 'select', options: ['on', 'off'] },
       antiBotAction: { label: 'إجراء مكافحة البوت', type: 'text', ph: 'delete' },
@@ -104,7 +102,6 @@
       gaCloseTime: { label: 'وقت الإغلاق', type: 'text', ph: '15:00' },
       gaOpenTime: { label: 'وقت الفتح', type: 'text', ph: '05:00' },
       customAutoReplies: { label: 'الردود التلقائية المخصصة', type: 'textarea', ph: 'كلمة:الرد\nhello:أهلا' },
-      autoReply: { label: 'الرد الآلي', type: 'select', options: ['on', 'off'] },
       autoSave: { label: 'الحفظ التلقائي', type: 'select', options: ['on', 'off'] },
       language: { label: 'اللغة', type: 'text', ph: 'arabic' },
       antiViewOnce: { label: 'منع العرض لمرة واحدة', type: 'select', options: ['on', 'off'] },
@@ -152,12 +149,12 @@
     container.innerHTML = ''
     const groupedLabels = {
       'معلومات أساسية': ['name', 'ownerNumber', 'ownername', 'description', 'from', 'age', 'prefix', 'footer2', 'mode', 'language'],
-      'التفاعل والحالات': ['statusCustomReact', 'autoStatusRead', 'autoStatusReact', 'keepDeletedStatus', 'autoRead', 'autoReact', 'autoPrivateReact', 'autoReactScope'],
+      'التفاعل والحالات': ['statusCustomReact', 'autoStatusRead', 'autoStatusReact', 'statusReactionNotice', 'keepDeletedStatus', 'autoRead', 'autoReact', 'autoPrivateReact', 'autoReactScope'],
       'الرد التلقائي والـ AI': ['customAutoReplies', 'aiReplyScope', 'aliveMsg', 'customMsg', 'statusMsgSend', 'statusMsgType', 'voiceFooter'],
-      'الحماية والفلاتر': ['antiBad', 'antiBadWords', 'antiLink', 'antiLinkList', 'antiMention', 'antiViewOnce', 'antiBug', 'antiBot', 'antiBotAction', 'antiDelete', 'sendDeleteTo', 'disableReadReceipts', 'antiEdit', 'antiAction', 'antiWarnCount'],
+      'الحماية والفلاتر': ['antiBad', 'antiBadWords', 'antiLink', 'antiLinkList', 'antiMention', 'antiViewOnce', 'antiBug', 'antiBot', 'antiBotAction', 'antiDelete', 'sendDeleteTo', 'antiEdit', 'antiAction', 'antiWarnCount'],
       'الاتصالات': ['antiCall', 'excludeCallNumbers', 'autoBlock', 'autoVoice'],
-      'الوصول والخصوصية': ['antiGroupAdd', 'antiPrivateMessages', 'autoTyping', 'autoRecording', 'alwaysOnline', 'ghostMode'],
-      'الرد التلقائي والمحتوى': ['customAutoReplies', 'autoReply', 'aiReplyScope', 'aliveMsg', 'customMsg', 'statusMsgSend', 'statusMsgType', 'voiceFooter', 'menu', 'alive', 'owner', 'autoSave', 'gaGroupJid', 'gaTimezone', 'gaCloseTime', 'gaOpenTime'],
+      'الوجود والكتابة': ['autoTyping', 'autoRecording', 'alwaysOnline', 'ghostMode'],
+      'الإدارة والمحتوى': ['menu', 'alive', 'owner', 'autoSave', 'gaGroupJid', 'gaTimezone', 'gaCloseTime', 'gaOpenTime'],
     }
 
     const fragment = document.createDocumentFragment()
@@ -194,73 +191,6 @@
       out[el.dataset.settingKey] = el.value
     })
     return out
-  }
-
-  function buildCommandGroups(settings) {
-    const prefix = String((settings && settings.prefix) || '.').trim() || '.'
-    return [
-      {
-        title: 'الأساسيات',
-        items: [
-          { cmd: prefix + 'القائمة', desc: 'عرض دليل جميع الأوامر' },
-          { cmd: prefix + 'الإعدادات', desc: 'عرض الإعدادات الحالية للرقم' },
-          { cmd: prefix + 'الإيموجي 💚', desc: 'تغيير إيموجي التفاعل على الحالات' },
-          { cmd: prefix + 'الوضع خاص', desc: 'تغيير وضع تشغيل الرقم' },
-          { cmd: prefix + 'البادئة !', desc: 'تغيير بادئة الأوامر' },
-          { cmd: prefix + 'تعيين autoRead on', desc: 'تعديل أي إعداد باسمه مباشرة' },
-        ],
-      },
-      {
-        title: 'الحماية',
-        items: [
-          { cmd: prefix + 'حماية تشغيل', desc: 'تفعيل باقة الحماية الأساسية كاملة' },
-          { cmd: prefix + 'قائمة_الحماية', desc: 'عرض أوامر الحماية السريعة' },
-          { cmd: prefix + 'منع_الروابط تشغيل', desc: 'حذف الروابط مع التحذير' },
-          { cmd: prefix + 'منع_الإضافة تشغيل', desc: 'مغادرة أي مجموعة عند الإضافة' },
-          { cmd: prefix + 'منع_الخاص تشغيل', desc: 'حذف الرسائل الخاصة الواردة تلقائياً' },
-          { cmd: prefix + 'الرد_الآلي تشغيل', desc: 'تفعيل الردود الآلية الخاصة' },
-          { cmd: prefix + 'إخفاء_الصحين تشغيل', desc: 'إخفاء صحّي الاستلام والقراءة' },
-        ],
-      },
-      {
-        title: 'التفاعل والوسائط',
-        items: [
-          { cmd: prefix + 'التفاعل تشغيل', desc: 'تشغيل أو إيقاف التفاعل على الحالات' },
-          { cmd: prefix + 'تيك_توك <رابط>', desc: 'تحميل فيديو تيك توك بدون علامة' },
-          { cmd: prefix + 'إنستغرام <رابط>', desc: 'تحميل فيديو إنستغرام' },
-          { cmd: prefix + 'تحميل <رابط>', desc: 'تحميل تلقائي للرابط المدعوم' },
-        ],
-      },
-      {
-        title: 'اللوحة والمحفظة',
-        items: [
-          { cmd: prefix + 'اللوحة', desc: 'فتح رابط لوحة الرقم على الموقع' },
-          { cmd: prefix + 'كلمة_السر 1234', desc: 'تغيير كلمة مرور اللوحة' },
-          { cmd: prefix + 'الرصيد', desc: 'عرض الرصيد والعملات والمزايا' },
-          { cmd: prefix + 'المكافأة', desc: 'استلام العملات اليومية' },
-          { cmd: prefix + 'المتجر', desc: 'عرض متجر المزايا' },
-          { cmd: prefix + 'اشتراكاتي', desc: 'عرض المزايا النشطة' },
-          { cmd: prefix + 'ربط 9677XXXXXXXX', desc: 'إصدار كود اقتران لرقم جديد' },
-        ],
-      },
-    ]
-  }
-
-  function renderCommandGuide(settings) {
-    const wrap = qs('panelCommandGroups')
-    if (!wrap) return
-    const groups = buildCommandGroups(settings || STATE.settings || {})
-    wrap.innerHTML = groups.map((group) => (
-      '<article class="command-card">' +
-        '<div class="command-card-head"><strong>' + escapeHtml(group.title) + '</strong></div>' +
-        '<div class="command-list">' + group.items.map((item) => (
-          '<div class="command-item">' +
-            '<code>' + escapeHtml(item.cmd) + '</code>' +
-            '<p>' + escapeHtml(item.desc) + '</p>' +
-          '</div>'
-        )).join('') + '</div>' +
-      '</article>'
-    )).join('')
   }
 
   async function api(path, options) {
@@ -383,11 +313,6 @@
       if (hero) hero.classList.toggle('active', active)
       const dot = qs('reactionDot')
       if (dot) dot.className = 'reaction-dot' + (active ? ' active' : '')
-      const heart = qs('reactionHeart')
-      if (heart) {
-        heart.className = 'reaction-heart' + (active ? ' active' : '')
-        heart.textContent = (STATE.reactions.latestReaction && STATE.reactions.latestReaction.emoji) || '💚'
-      }
       safeSet('reactionIndicatorText', active ? 'التفاعل ظاهر الآن باللون الأخضر' : 'لا يوجد تفاعل حديث')
       safeSet('reactionTotalCount', formatNumber(STATE.reactions.total || 0) + ' عملية')
 
@@ -434,9 +359,8 @@
     STATE.settings = data.settings || {}
     safeSet('panelHeaderNumber', (data.number || STATE.number))
     safeSet('panelStatusLabel', data.status || '—')
-    safeSet('panelEmojiLabel', data.emoji || '💚')
+    safeSet('panelEmojiLabel', data.emoji || '❤️')
     buildSettingsGrid(STATE.settings, STATE.fieldMeta)
-    renderCommandGuide(STATE.settings)
   }
 
   async function loadWalletAndStore() {
@@ -514,8 +438,7 @@
         return
       }
       STATE.settings = data.settings || STATE.settings
-      safeSet('panelEmojiLabel', STATE.settings.statusCustomReact || '💚')
-      renderCommandGuide(STATE.settings)
+      safeSet('panelEmojiLabel', STATE.settings.statusCustomReact || '❤️')
       setStatus(status, '✅ تم حفظ الإعدادات بنجاح.', 'success')
     } catch (e) {
       setStatus(status, e.message || 'فشل الحفظ.', 'error')
