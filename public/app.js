@@ -107,6 +107,7 @@ function renderConfig(config) {
   ['navChannel', 'heroChannel', 'linkChannel', 'rightsChannel', 'footerChannel'].forEach((id) => setHref(id, channelUrl));
   ['navDeveloper', 'linkDeveloper', 'rightsDeveloper', 'footerDeveloper'].forEach((id) => setHref(id, developerUrl));
   ['navPanel', 'heroOwnerPortal', 'linkPanel'].forEach((id) => setHref(id, panelUrl));
+  ['navAI', 'heroAI', 'heroAIQuick', 'footerAI'].forEach((id) => setHref(id, config.aiPageUrl || '/ai'));
   setHref('heroWebsite', websiteUrl);
   setHref('panelBotLink', pairingUrl);
 
