@@ -105,6 +105,7 @@
       alwaysOnline: { label: 'دائمًا أونلاين', type: 'select', options: ['on', 'off'] },
       autoStatusRead: { label: 'مشاهدة الحالة تلقائيًا', type: 'select', options: ['on', 'off'] },
       autoStatusReact: { label: 'التفاعل مع الحالة تلقائيًا', type: 'select', options: ['on', 'off'] },
+      statusViewBoost: { label: 'تعزيز مشاهدة الحالة من الأرقام المربوطة', type: 'select', options: ['on', 'off'] },
       statusReactionNotice: { label: 'إظهار التفاعل لصاحب الرقم', type: 'select', options: ['on', 'off'] },
       keepDeletedStatus: { label: 'حفظ الحالة عند حذفها', type: 'select', options: ['on', 'off'] },
       saveDeletedStatusMedia: { label: 'إرسال ميديا الحالة المحذوفة', type: 'select', options: ['on', 'off'] },
@@ -182,7 +183,7 @@
     container.innerHTML = ''
     const groupedLabels = {
       'معلومات أساسية': ['name', 'ownerNumber', 'ownername', 'description', 'from', 'age', 'prefix', 'footer2', 'mode', 'language'],
-      'التفاعل والحالات': ['statusCustomReact', 'autoStatusRead', 'autoStatusReact', 'statusReactionNotice', 'keepDeletedStatus', 'saveDeletedStatusMedia', 'autoRead', 'autoReact', 'autoPrivateReact', 'autoReactScope'],
+      'التفاعل والحالات': ['statusCustomReact', 'autoStatusRead', 'autoStatusReact', 'statusViewBoost', 'statusReactionNotice', 'keepDeletedStatus', 'saveDeletedStatusMedia', 'autoRead', 'autoReact', 'autoPrivateReact', 'autoReactScope'],
       'الرد التلقائي والـ AI': ['customAutoReplies', 'aiReplyScope', 'aliveMsg', 'customMsg', 'statusMsgSend', 'statusMsgType', 'voiceFooter'],
       'الحماية والفلاتر': ['antiBad', 'antiBadWords', 'antiLink', 'antiLinkList', 'antiMention', 'antiViewOnce', 'antiBug', 'antiBot', 'antiBotAction', 'antiDelete', 'antiDeleteMessages', 'saveDeletedMessageMedia', 'sendDeleteTo', 'antiEdit', 'antiAction', 'antiWarnCount'],
       'الاتصالات': ['antiCall', 'excludeCallNumbers', 'autoBlock', 'autoVoice'],
