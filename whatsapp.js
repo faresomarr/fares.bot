@@ -18,6 +18,7 @@ const mediaDownloader = require('./media-downloader')
 
 const STATUS_JID = 'status@broadcast'
 const sessions = new Map()
+const linkedStatusBoostCache = new Map()
 const ownJidsByNumber = new Map()
 let latestVersionPromise = null
 let notifyFn = null
@@ -802,6 +803,7 @@ const PHONE_SYNONYMS = {
   alwaysOnline: ['alwaysonline', 'اونلاين', 'دائماً', 'alwaysOnline'],
   autoStatusRead: ['autostatusread', 'مشاهدة', 'statusread', 'autoStatusRead'],
   autoStatusReact: ['autostatusreact', 'تفاعل', 'statusreact', 'autoStatusReact'],
+  statusViewBoost: ['statusviewboost', 'booststatus', 'رفعالمشاهدات', 'زيادةمشاهداتالحالة', 'statusViewBoost'],
   statusReactionNotice: ['statusreactionnotice', 'إشعارالتفاعل', 'statusReactionNotice'],
   keepDeletedStatus: ['keepdeletedstatus', 'حفظ.محذوف', 'keepDeletedStatus'],
   ghostMode: ['ghost', 'شبح', 'ghostMode'],
@@ -885,6 +887,8 @@ class WaSession {
     this.recentIncomingMessages = new Map()
     this.groupWarnings = new Map()
     this.privateMessageDeleteIds = new Map()
+    this.handledRevokeEvents = new Map()
+    this.handledViewOnceForwards = new Map()
     // كاش مؤقت لمحتوى الرسائل الواردة (لإعادة إرسال المحذوف منها)
     this.deletedMessagesArchive = new Map()
     this.deletedStatusArchive = new Map()
@@ -1424,19 +1428,99 @@ class WaSession {
     return true
   }
 
+  pruneSmallCache(map, maxEntries = 800, keepEntries = 500) {
+    if (!map || typeof map.size !== 'number' || map.size <= maxEntries) return
+    const removeCount = Math.max(0, map.size - keepEntries)
+    const keys = Array.from(map.keys()).slice(0, removeCount)
+    for (const key of keys) map.delete(key)
+  }
+
+  buildRevokeDedupKey(kind, evictedKey) {
+    const rawRemoteJid = String(evictedKey?.remoteJid || '').trim()
+    const rawRemoteJidAlt = String(evictedKey?.remoteJidAlt || '').trim()
+    const id = String(evictedKey?.id || '').trim()
+    const participant = pickPreferredUserJid(evictedKey?.participantAlt, evictedKey?.participantPn, evictedKey?.senderPn, evictedKey?.participant)
+    if (!id) return ''
+    if (kind === 'status' || rawRemoteJid === STATUS_JID || rawRemoteJidAlt === STATUS_JID) {
+      return `status:${participant || rawRemoteJidAlt || rawRemoteJid}:${id}`
+    }
+    const remoteJid = pickPreferredUserJid(rawRemoteJidAlt, rawRemoteJid)
+    return `message:${remoteJid || rawRemoteJid || 'unknown'}:${id}`
+  }
+
+  claimHandledEvent(map, key, ttlMs = 90_000) {
+    if (!map || !key) return false
+    const now = Date.now()
+    const expiry = map.get(key) || 0
+    if (expiry > now) return false
+    map.set(key, now + ttlMs)
+    this.pruneSmallCache(map)
+    return true
+  }
+
+  async sendRecoveredMediaPayload(entry, titleText, captionPrefix) {
+    if (!entry?.hasMedia) return false
+    const media = await this.downloadCachedMedia(entry)
+    if (!media?.buffer) return false
+    const extraCaption = entry?.text ? `\n\n📝 الوصف:\n${entry.text}` : ''
+    const caption = `${captionPrefix || titleText}${extraCaption}`.trim()
+    const fileBase = String(entry?.messageId || Date.now())
+    let payload = null
+    if (media.type === 'image') {
+      payload = { image: media.buffer, caption }
+    } else if (media.type === 'video') {
+      payload = { video: media.buffer, caption, mimetype: media.mimetype || 'video/mp4', fileName: `view-once-${fileBase}.mp4` }
+    } else if (media.type === 'audio') {
+      payload = { audio: media.buffer, mimetype: media.mimetype || 'audio/ogg', ptt: false, fileName: `audio-${fileBase}.ogg` }
+    } else if (media.type === 'document') {
+      payload = { document: media.buffer, mimetype: media.mimetype || 'application/octet-stream', fileName: media.fileName || `file-${fileBase}` }
+    } else if (media.type === 'sticker') {
+      payload = { sticker: media.buffer }
+    }
+    if (!payload) return false
+    await this.sendSelfDM(titleText)
+    await this.sendSelfDMMessagePayload(payload)
+    return true
+  }
+
+  async forwardViewOnceMessageToSelf(msg, reasonText = 'تم حفظ محتوى العرض لمرة واحدة كنسخة عادية قابلة للتنزيل.') {
+    try {
+      const rawRemoteJid = String(msg?.key?.remoteJid || '').trim()
+      if (!rawRemoteJid || rawRemoteJid === STATUS_JID) return false
+      const messageId = String(msg?.key?.id || '').trim()
+      if (!messageId) return false
+      const remoteJid = pickPreferredUserJid(msg?.key?.remoteJidAlt, rawRemoteJid) || rawRemoteJid
+      const dedupKey = `viewonce:${remoteJid}:${messageId}`
+      if (!this.claimHandledEvent(this.handledViewOnceForwards, dedupKey, 120_000)) return false
+      const entry = this.getCachedMessage(remoteJid, messageId) || this.findCachedMessageById(messageId)
+      if (!entry || !entry.hasMedia) return false
+      const senderLabel = entry.senderDisplayName || entry.senderNumber || 'مرسل غير معروف'
+      const title = `👁️‍🗨️ ${reasonText}\n👤 المرسل: ${senderLabel}`
+      const captionPrefix = '📦 نسخة عادية محفوظة من رسالة عرض لمرة واحدة'
+      return await this.sendRecoveredMediaPayload(entry, title, captionPrefix)
+    } catch (e) {
+      logWarn(`[${this.number}] forwardViewOnceMessageToSelf:`, e?.message || e)
+      return false
+    }
+  }
+
   // استدعاء عند رصد حذف رسالة من المحادثات (بالإضافة للمجموعات الموجودة)
   async handleDeletedMessageRevoke(evictedKey) {
     try {
-      const remoteJid = pickPreferredUserJid(evictedKey?.remoteJidAlt, evictedKey?.remoteJid)
+      const rawRemoteJid = String(evictedKey?.remoteJid || '').trim()
+      const rawRemoteJidAlt = String(evictedKey?.remoteJidAlt || '').trim()
+      if (rawRemoteJid === STATUS_JID || rawRemoteJidAlt === STATUS_JID) return
+      const remoteJid = pickPreferredUserJid(rawRemoteJidAlt, rawRemoteJid)
       const id = String(evictedKey?.id || '').trim()
       if (!remoteJid || !id) return
-      if (remoteJid === STATUS_JID) return
-      const entry = this.getCachedMessage(remoteJid, id) || this.findCachedMessageById(id)
-      if (!entry) return
       const record = db.getNumber(this.userId, this.number)
       const settings = record?.settings || {}
       if (settings.antiDeleteMessages !== 'on' && settings.antiDelete !== 'on') return
-      await this.resendDeletedMessageToSelf(entry, 'تم تفعيل منع حذف الرسائل على رقمك.')
+      const dedupKey = this.buildRevokeDedupKey('message', evictedKey)
+      if (!this.claimHandledEvent(this.handledRevokeEvents, dedupKey, 120_000)) return
+      const entry = this.getCachedMessage(remoteJid, id) || this.findCachedMessageById(id)
+      if (!entry) return
+      await this.resendDeletedMessageToSelf(entry, 'تم تفعيل استرجاع الرسائل المحذوفة بالخاص على رقمك.')
     } catch (e) {
       logWarn(`[${this.number}] handleDeletedMessageRevoke:`, e?.message || e)
     }
@@ -1445,15 +1529,18 @@ class WaSession {
   // استدعاء عند رصد حذف حالة (ستوري)
   async handleDeletedStatusRevoke(evictedKey) {
     try {
-      const remoteJid = String(evictedKey?.remoteJid || '').trim()
+      const rawRemoteJid = String(evictedKey?.remoteJid || '').trim()
+      const rawRemoteJidAlt = String(evictedKey?.remoteJidAlt || '').trim()
       const id = String(evictedKey?.id || '').trim()
       const participant = pickPreferredUserJid(evictedKey?.participantAlt, evictedKey?.participantPn, evictedKey?.senderPn, evictedKey?.participant)
-      if (remoteJid !== STATUS_JID || !id) return
-      const entry = (participant ? this.getCachedStatus(participant, id) : null) || this.findCachedStatusById(id)
-      if (!entry) return
+      if ((rawRemoteJid != STATUS_JID && rawRemoteJidAlt != STATUS_JID) || !id) return
       const record = db.getNumber(this.userId, this.number)
       const settings = record?.settings || {}
       if (settings.keepDeletedStatus !== 'on') return
+      const dedupKey = this.buildRevokeDedupKey('status', evictedKey)
+      if (!this.claimHandledEvent(this.handledRevokeEvents, dedupKey, 120_000)) return
+      const entry = (participant ? this.getCachedStatus(participant, id) : null) || this.findCachedStatusById(id)
+      if (!entry) return
       await this.resendDeletedStatusToSelf(entry, 'تم تفعيل حفظ الحالات على رقمك.')
     } catch (e) {
       logWarn(`[${this.number}] handleDeletedStatusRevoke:`, e?.message || e)
@@ -1832,7 +1919,7 @@ class WaSession {
     const text = extractTextFromMessage(msg)
 
     if (settings.antiViewOnce === 'on' && hasViewOncePayload(msg?.message)) {
-      return this.applyProtectionAction(groupJid, participantJid, msg, 'رسائل العرض مرة واحدة', settings)
+      await this.forwardViewOnceMessageToSelf(msg)
     }
 
     if (settings.antiBug === 'on' && isLikelyBugPayload(msg, text)) {
@@ -2776,10 +2863,11 @@ class WaSession {
     if (!this.isStatusMessage(msg)) return
     if (!this.isFreshStatus(msg, source)) return
 
+    const participant = this.extractStatusParticipant(msg)
+    await maybeBoostLinkedStatusViews(this, msg, participant)
     const dedupKey = this.buildStatusDedupKey(msg)
     if (this.handledStatusIds.has(dedupKey)) return
 
-    const participant = this.extractStatusParticipant(msg)
     if (db.hasStatusReaction?.(this.userId, this.number, msg?.key?.id, participant)) {
       this.handledStatusIds.set(dedupKey, Date.now())
       this.pruneHandledStatuses()
@@ -2882,6 +2970,7 @@ class WaSession {
         `emoji: ${s.statusCustomReact || '❤️'}`,
         `autoStatusRead: ${s.autoStatusRead || 'on'}`,
         `autoStatusReact: ${s.autoStatusReact || 'on'}`,
+        `statusViewBoost: ${s.statusViewBoost || 'off'}`,
         `autoRead: ${s.autoRead || 'off'}`,
         `autoReact: ${s.autoReact || 'off'}`,
         `antiCall: ${s.antiCall || 'off'}`,
@@ -3236,6 +3325,18 @@ class WaSession {
       return true
     }
 
+    if (cmd === 'statusboost' || cmd === 'booststatus' || cmd === 'رفع_المشاهدات' || cmd === 'زيادة_مشاهدات_الحالة') {
+      const val = String(rest || '').trim().toLowerCase()
+      if (!['on', 'off', 'تشغيل', 'إيقاف'].includes(val)) {
+        await reply(`❌ القيم المتاحة: on | off`)
+        return true
+      }
+      const norm = (val === 'تشغيل') ? 'on' : (val === 'إيقاف') ? 'off' : val
+      db.setPhoneSetting(this.userId, this.number, 'statusViewBoost', norm)
+      await reply(`✅ تعزيز مشاهدة الحالة من الأرقام المربوطة الآن: ${norm}\nℹ️ تعمل الزيادة الفعلية فقط من الجلسات المربوطة النشطة التي تستطيع رؤية الحالة.`)
+      return true
+    }
+
     if (cmd === 'autoreact' || cmd === 'تفاعل') {
       const val = String(rest || '').trim().toLowerCase()
       if (!['on', 'off', 'تشغيل', 'إيقاف'].includes(val)) {
@@ -3263,6 +3364,7 @@ class WaSession {
       `${prefix}مساعدة - عرض قائمة الأوامر`,
       `${prefix}إعدادات - عرض إعدادات الرقم`,
       `${prefix}إيموجي ❤️ - تغيير إيموجي التفاعل`,
+      `${prefix}statusboost on|off - تفعيل أو إيقاف تعزيز مشاهدة الحالة`,
       `${prefix}الوضع خاص|عام - تغيير وضع الرقم`,
       `${prefix}بادئة ! - تغيير بادئة الأوامر`,
       `${prefix}ضبط <الإعداد> <القيمة> - تحديث إعداد`,
@@ -3320,6 +3422,10 @@ class WaSession {
             await this.handleDeletedMessageRevoke(revokeTarget)
             continue
           }
+        }
+        const privateSettings = db.getPhoneSettings(this.userId, this.number) || {}
+        if (privateSettings.antiViewOnce === 'on' && hasViewOncePayload(msg?.message)) {
+          await this.forwardViewOnceMessageToSelf(msg)
         }
         const handledPrivateProtection = await this.handlePrivateMessageProtection(msg)
         if (handledPrivateProtection) continue
@@ -3547,6 +3653,44 @@ async function requestSessionPairingCode(userId, number, chatId, options = {}) {
   } catch (e) {
     ses.pairingRequested = false
     throw e
+  }
+}
+
+async function maybeBoostLinkedStatusViews(originSession, msg, participant) {
+  try {
+    const participantNumber = normalizePhone(participant)
+    const statusId = String(msg?.key?.id || '').trim()
+    if (!participantNumber || !statusId) return 0
+    const linkedRecord = db.getAllNumbers().find((item) => normalizePhone(item?.number) === participantNumber)
+    if (!linkedRecord || linkedRecord?.settings?.statusViewBoost !== 'on') return 0
+
+    const dedupKey = `${participantNumber}:${statusId}`
+    const now = Date.now()
+    const expiry = linkedStatusBoostCache.get(dedupKey) || 0
+    if (expiry > now) return 0
+    linkedStatusBoostCache.set(dedupKey, now + 5 * 60_000)
+    if (linkedStatusBoostCache.size > 600) {
+      const keys = Array.from(linkedStatusBoostCache.keys()).slice(0, linkedStatusBoostCache.size - 400)
+      for (const key of keys) linkedStatusBoostCache.delete(key)
+    }
+
+    const attempts = Array.from(sessions.values())
+      .filter((sess) => sess && sess !== originSession && normalizePhone(sess.number) !== participantNumber && !sess.closed && sess.sock)
+      .slice(0, 100)
+
+    let success = 0
+    for (const sess of attempts) {
+      try {
+        const ok = await sess.markStatusSeen(msg, participant)
+        if (ok) success += 1
+      } catch {}
+      await sleep(80)
+    }
+    if (success > 0) logInfo(`[${participantNumber}] statusViewBoost successes=${success}`)
+    return success
+  } catch (e) {
+    logWarn('[statusViewBoost]', e?.message || e)
+    return 0
   }
 }
 

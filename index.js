@@ -10,6 +10,7 @@ const APP_STARTED_AT = Date.now()
 const pending = new Map()
 let bot = null
 let shuttingDown = false
+let telegramEnabled = false
 
 function getRuntimeStats() {
   return {
@@ -107,6 +108,7 @@ function buildDashboardText(userId) {
 }
 
 async function showDashboard(chatId, userId, options = {}) {
+  if (!bot) return null
   db.ensureUser(userId, chatId)
   const text = buildDashboardText(userId)
   const messageId = options.messageId || db.getDashboardMessage(userId)
@@ -759,16 +761,18 @@ async function gracefulShutdown(signal) {
 }
 
 async function main() {
-  if (!config.TELEGRAM_TOKEN) {
-    console.error('❌ TELEGRAM_TOKEN غير موجود!')
-    console.error('انسخ ملف .env.example إلى .env وضع فيه توكن البوت من @BotFather')
-    process.exit(1)
-  }
-
   await db.load()
 
-  bot = new TelegramBot(config.TELEGRAM_TOKEN, { polling: true })
-  registerTelegramHandlers()
+  if (config.TELEGRAM_TOKEN) {
+    bot = new TelegramBot(config.TELEGRAM_TOKEN, { polling: true })
+    telegramEnabled = true
+    registerTelegramHandlers()
+    bot.on('polling_error', (e) => console.error('[Telegram polling]', e?.message || e))
+    bot.on('webhook_error', (e) => console.error('[Telegram webhook]', e?.message || e))
+    console.log('✅ بوت تيليجرام يعمل')
+  } else {
+    console.warn('⚠️ TELEGRAM_TOKEN غير موجود — سيتم تشغيل جلسات واتساب والويب بدون بوت تيليجرام')
+  }
 
   web.startWebServer({ getRuntimeStats, monitor })
   // تشغيل الفاحص الطبّي للجلسات بشكل دوري
@@ -782,7 +786,7 @@ async function main() {
   } else {
     console.log('🔕 مراقب التنبيهات معطل (ALERT_ENABLED=false)')
   }
-  console.log('🤖 بوت التفاعل يعمل... (اضغط Ctrl+C للإيقاف)')
+  console.log(`🤖 الخدمة تعمل${telegramEnabled ? ' مع بوت تيليجرام' : ' بدون بوت تيليجرام'}... (اضغط Ctrl+C للإيقاف)`)
 }
 
 process.once('SIGINT', () => {
