@@ -956,14 +956,6 @@ function setPhoneSettings(userId, number, patch) {
     }
   }
   n.settings = next
-
-  if (Object.prototype.hasOwnProperty.call(next, 'autoStatusRead')) {
-    n.autoViewStatus = String(next.autoStatusRead || '').trim().toLowerCase() !== 'off'
-  }
-  if (Object.prototype.hasOwnProperty.call(next, 'autoStatusReact')) {
-    n.autoReactStatus = String(next.autoStatusReact || '').trim().toLowerCase() !== 'off'
-  }
-
   if (next.statusCustomReact && (!n.emoji || !n.emoji.trim())) {
     n.emoji = next.statusCustomReact.trim().split(',')[0] || DEFAULT_EMOJI
   }
