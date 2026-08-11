@@ -3566,4 +3566,23 @@ module.exports = {
   requestIsolatedPairingCode,
   requestSessionPairingCode,
   heartbeat,
+  listSessionSnapshots,
+}
+
+// قائمة لقطعات الجلسات النشطة لاستخدامها من lib/session-manager.js
+function listSessionSnapshots() {
+  const out = []
+  try {
+    for (const [key, sess] of sessions.entries()) {
+      if (!sess) continue
+      out.push({
+        key,
+        userId: sess.userId || sess.sessionUserId || null,
+        number: sess.number || key.split(':').pop() || null,
+        sockReady: Boolean(sess.sock && sess.sock.ws && sess.sock.ws.readyState === 1),
+        lastHeartbeat: sess.lastHeartbeatAt || Date.now(),
+      })
+    }
+  } catch (e) { /* swallow */ }
+  return out
 }

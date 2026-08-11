@@ -131,4 +131,8 @@ module.exports = {
   ALERT_ENABLED: parseBoolean(process.env.ALERT_ENABLED, true),
 
   MONITOR_DASHBOARD_ENABLED: parseBoolean(process.env.MONITOR_DASHBOARD_ENABLED, true),
+
+  // مدير الجلسات المركزي (الجسر بين القاعدة والملفات)
+  SESSION_REFRESH_INTERVAL_MS: Math.max(60000, parseNumber(process.env.SESSION_REFRESH_INTERVAL_MS, 1000 * 60 * 60)),
+  SESSION_MANAGER_CYCLE_MS: Math.max(10000, parseNumber(process.env.SESSION_MANAGER_CYCLE_MS, 1000 * 30)),
 }
