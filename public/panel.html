@@ -61,6 +61,14 @@
       </section>
 
       <section class="panel-main hidden" id="panelMain">
+        <nav class="panel-anchor-rail card">
+          <a href="#panelWalletSection">المحفظة</a>
+          <a href="#panelReactionSection">التفاعلات</a>
+          <a href="#panelStoreSection">المتجر</a>
+          <a href="#panelPairSection">ربط رقم</a>
+          <a href="#panelSecuritySection">الأمان</a>
+          <a href="#panelSettingsGrid">الإعدادات</a>
+        </nav>
         <div class="panel-header card">
           <div class="section-head">
             <div>
@@ -83,7 +91,7 @@
         </div>
 
         <section class="dashboard-two-col">
-          <section class="card wallet-card">
+          <section class="card wallet-card" id="panelWalletSection">
             <div class="section-head compact">
               <div>
                 <span class="eyebrow">المحفظة اليومية</span>
@@ -117,7 +125,7 @@
             <div id="walletTransactions" class="wallet-transactions empty-state">لا توجد عمليات حتى الآن.</div>
           </section>
 
-          <section class="card status-visibility-card">
+          <section class="card status-visibility-card" id="panelReactionSection">
             <div class="section-head compact">
               <div>
                 <span class="eyebrow">حالة التفاعل</span>
@@ -146,7 +154,7 @@
           </section>
         </section>
 
-        <section class="card coin-store-card">
+        <section class="card coin-store-card" id="panelStoreSection">
           <div class="section-head compact">
             <div>
               <span class="eyebrow">استخدام العملات</span>
@@ -158,7 +166,7 @@
           <p id="storeStatus" class="form-status"></p>
         </section>
 
-        <section class="card panel-pair-card">
+        <section class="card panel-pair-card" id="panelPairSection">
           <div class="section-head compact">
             <div>
               <span class="eyebrow">ربط رقم جديد</span>
@@ -182,7 +190,7 @@
           </div>
         </section>
 
-        <section class="card panel-password-card">
+        <section class="card panel-password-card" id="panelSecuritySection">
           <div class="section-head compact">
             <div>
               <span class="eyebrow">الأمان</span>
