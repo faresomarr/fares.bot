@@ -661,12 +661,25 @@ function startWebServer({ getRuntimeStats, monitor: monitorMod = monitor }) {
     }
   })
 
-  app.get('/bot', (req, res) => {
+  // صفحات Mini Bot مستقلة: كل قسم يعرض ملف HTML الخاص به بدلاً من إعادة عرض الصفحة الرئيسية.
+  const miniBotPages = {
+    deploy: 'deploy.html',
+    settings: 'settings.html',
+    autosave: 'autosave.html',
+    autoreply: 'autoreply.html',
+    about: 'about.html',
+    faq: 'faq.html',
+    contact: 'contact.html',
+  }
+
+  app.get(['/bot', '/bot/'], (req, res) => {
     res.sendFile(path.join(publicDir, 'bot.html'))
   })
 
-  app.get('/bot/:view', (req, res) => {
-    res.sendFile(path.join(publicDir, 'bot.html'))
+  app.get('/bot/:view', (req, res, next) => {
+    const page = miniBotPages[String(req.params.view || '').toLowerCase()]
+    if (!page) return next()
+    res.sendFile(path.join(publicDir, page))
   })
 
   app.get('/ai', (req, res) => {
