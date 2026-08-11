@@ -4,8 +4,7 @@
   "description": "بوت تيليجرام لربط أرقام واتساب برمز الاقتران والتفاعل التلقائي مع الحالات (ستوريات) بشكل مستمر - جلسات مستقلة لكل رقم",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
-    "start:wa-service": "node wa-service.js"
+    "start": "node index.js"
   },
   "engines": {
     "node": ">=20.0.0"
