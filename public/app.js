@@ -200,7 +200,7 @@ async function submitComment(event) {
 
   form.reset();
   status.className = 'form-status success';
-  status.textContent = 'تم إرسال تعليقك بنجاح.';
+  status.textContent = data.comment?.reply ? 'تم إرسال تعليقك وإضافة رد آلي أولي مباشرة.' : 'تم إرسال تعليقك بنجاح.';
   await loadComments();
   await loadStats();
 }
