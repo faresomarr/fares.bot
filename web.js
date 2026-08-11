@@ -309,6 +309,15 @@ function startWebServer({ getRuntimeStats, monitor: monitorMod = monitor }) {
         aiChatEnabled: config.AI_CHAT_ENABLED,
         aiPageUrl: `${config.WEBSITE_URL.replace(/\/+$/, '')}/ai`,
         sitePairingEnabled: true,
+        databaseInfo: {
+          mongoEnabled: db.isMongoEnabled(),
+          sessionStorageMode: config.SESSION_STORAGE_MODE,
+          automaticIndexes: true,
+          sessionPersistence: true,
+          autoReconnect: true,
+          statusAutomation: true,
+          writeLocalStateCache: config.WRITE_LOCAL_STATE_CACHE === true,
+        },
       },
     })
   })
