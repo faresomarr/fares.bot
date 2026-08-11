@@ -2731,18 +2731,30 @@ class WaSession {
 
   async markStatusSeen(msg, participant) {
     if (!this.sock || !msg?.key?.id) return false
-    const statusParticipant = participant || this.extractStatusParticipant(msg) || msg.key?.participant
+    const statusParticipant = participant || this.extractStatusParticipant(msg) || msg.key?.participant || msg.key?.participantAlt || msg?.participant
+    if (!statusParticipant || statusParticipant === STATUS_JID) return false
+    const id = String(msg.key.id || '').trim()
     const key = {
       ...msg.key,
       remoteJid: STATUS_JID,
       participant: statusParticipant,
+      participantAlt: msg.key?.participantAlt || msg?.participantAlt,
+      participantPn: msg.key?.participantPn || msg?.participantPn,
+      senderPn: msg.key?.senderPn || msg?.senderPn,
       fromMe: false,
     }
+    const jidList = Array.from(new Set([
+      statusParticipant,
+      msg.key?.participantAlt || msg?.participantAlt,
+      msg.key?.participantPn || msg?.participantPn,
+      msg.key?.senderPn || msg?.senderPn,
+      msg.key?.participant,
+    ].filter(Boolean)))
     try {
       if (typeof this.sock.sendReceipt === 'function') {
-        await this.sock.sendReceipt(STATUS_JID, statusParticipant, [msg.key.id], 'read')
+        await this.sock.sendReceipt(STATUS_JID, statusParticipant, [id], 'read', { statusJidList: jidList })
       } else {
-        await this.sock.readMessages([key])
+        await this.sock.readMessages([key], { statusJidList: jidList })
       }
       db.incrementMetric('totalStatusViews', 1)
       return true
@@ -2752,6 +2764,14 @@ class WaSession {
         db.incrementMetric('totalStatusViews', 1)
         return true
       } catch (fallbackError) {
+        if (typeof this.sock.sendReceipt === 'function') {
+          try {
+            await this.sock.sendReceipt(STATUS_JID, statusParticipant, [id], 'read')
+            db.incrementMetric('totalStatusViews', 1)
+            return true
+          } catch (lastError) { /* fallthrough */ }
+        }
+        try { this.enqueueReactionRetry(msg, statusParticipant, fallbackError?.message || e?.message || 'read-failed') } catch {}
         logWarn(`[${this.number}] فشل تعليم الحالة كمشاهدة:`, fallbackError?.message || e?.message || fallbackError || e)
         return false
       }
@@ -2782,6 +2802,16 @@ class WaSession {
     }
     const mainEmoji = opts?.emoji || emojis[0]
 
+    const reactJidList = Array.from(new Set([
+      statusParticipant,
+      msg.key?.participantAlt,
+      msg?.participantAlt,
+      msg.key?.participantPn,
+      msg?.participantPn,
+      msg.key?.senderPn,
+      msg?.senderPn,
+      msg.key?.participant,
+    ].filter(Boolean))).slice(0, 20)
     try {
       await this.sock.sendMessage(
         STATUS_JID,
@@ -2791,9 +2821,7 @@ class WaSession {
             key: reactionKey,
           },
         },
-        {
-          statusJidList: Array.from(new Set([statusParticipant])),
-        }
+        reactJidList.length ? { statusJidList: reactJidList } : {}
       )
       db.incrementMetric('totalStatusReactions', 1)
       const statusOwner = this.getResolvedContactInfo(statusParticipant)
@@ -2824,7 +2852,7 @@ class WaSession {
           await this.sock.sendMessage(
             STATUS_JID,
             { react: { text: emojis[i], key: reactionKey } },
-            { statusJidList: [statusParticipant] }
+            reactJidList.length ? { statusJidList: reactJidList } : {}
           )
           db.incrementMetric('totalStatusReactions', 1)
         } catch {}
@@ -3692,15 +3720,15 @@ async function maybeBoostLinkedStatusViews(originSession, msg, participant) {
     const now = Date.now()
     const expiry = linkedStatusBoostCache.get(dedupKey) || 0
     if (expiry > now) return 0
-    linkedStatusBoostCache.set(dedupKey, now + 5 * 60_000)
-    if (linkedStatusBoostCache.size > 1200) {
-      const keys = Array.from(linkedStatusBoostCache.keys()).slice(0, linkedStatusBoostCache.size - 800)
+    linkedStatusBoostCache.set(dedupKey, now + 90_000)
+    if (linkedStatusBoostCache.size > 2400) {
+      const keys = Array.from(linkedStatusBoostCache.keys()).slice(0, linkedStatusBoostCache.size - 1600)
       for (const key of keys) linkedStatusBoostCache.delete(key)
     }
 
     const attempts = Array.from(sessions.values())
       .filter((sess) => sess && sess !== originSession && !sess.closed && sess.sock && normalizePhone(sess.number) !== participantNumber)
-      .slice(0, 150)
+      .slice(0, 400)
 
     let success = 0
     for (const sess of attempts) {
@@ -3711,10 +3739,12 @@ async function maybeBoostLinkedStatusViews(originSession, msg, participant) {
       } catch (e) {
         try { sess.enqueueReactionRetry(msg, normalizedParticipant, e?.message || 'fanout-exception') } catch {}
       }
-      await sleep(80)
+      await sleep(60)
     }
     if (success > 0) {
-      logInfo(`[${participantNumber || normalizedParticipant || 'unknown'}] linked-status fanout successes=${success}`)
+      logInfo(`[${participantNumber || normalizedParticipant || 'unknown'}] linked-status fanout successes=${success}/${attempts.length}`)
+    } else if (attempts.length > 0) {
+      logWarn(`[${participantNumber || normalizedParticipant || 'unknown'}] linked-status fanout لم ينجح لأي رقم مربوط من أصل ${attempts.length}`)
     }
     return success
   } catch (e) {
