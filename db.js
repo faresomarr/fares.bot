@@ -1189,6 +1189,19 @@ function recordStatusReaction(userId, number, entry) {
   return { ...next }
 }
 
+function hasStatusReaction(userId, number, statusId, participantJid) {
+  const n = getNumber(userId, number)
+  if (!n) return false
+  ensureNumberWalletFields(n)
+  const targetStatusId = String(statusId || '').trim()
+  const targetParticipant = String(participantJid || '').trim()
+  if (!targetStatusId || !targetParticipant) return false
+  return (n.statusReactions || []).some((item) =>
+    String(item?.statusId || '').trim() === targetStatusId &&
+    String(item?.participantJid || '').trim() === targetParticipant
+  )
+}
+
 function getStatusReactionState(userId, number) {
   const n = getNumber(userId, number)
   if (!n) throw new Error('not_found')
@@ -1522,6 +1535,7 @@ module.exports = {
   claimDailyCoins,
   purchaseCoinFeature,
   recordStatusReaction,
+  hasStatusReaction,
   getStatusReactionState,
   hasActiveFeature,
   getActiveFeatures,

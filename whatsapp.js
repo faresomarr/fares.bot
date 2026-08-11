@@ -2008,15 +2008,16 @@ class WaSession {
           )
           return
         }
-        const idle = Date.now() - (this.lastSocketPong || 0)
-        if (wsState === 1 && idle > config.SESSION_HEALTH_TIMEOUT_MS) {
-          logWarn(`[${this.number}] watchdog: لا استجابة منذ ${Math.round(idle / 1000)}s — إعادة تشغيل الجلسة`)
-          this.forceRestart('idle-timeout').catch((e) =>
+        const now = Date.now()
+        const idle = now - (this.lastSocketPong || 0)
+        const hasBacklog = this.pendingReactions.some((item) => now - Number(item.firstQueuedAt || 0) >= config.STATUS_REACTION_REQUEUE_INTERVAL_MS * 2)
+        if (wsState === 1 && hasBacklog && idle > config.SESSION_HEALTH_TIMEOUT_MS) {
+          logWarn(`[${this.number}] watchdog: توجد حالات معلقة منذ ${Math.round(idle / 1000)}s — إعادة تشغيل الجلسة`)
+          this.forceRestart('pending-status-stall').catch((e) =>
             logError(`[${this.number}] watchdog restart`, e?.message || e)
           )
           return
         }
-        if (wsState === 1) this.lastSocketPong = Date.now()
       } catch (e) {
         logWarn(`[${this.number}] health check tick:`, e?.message || e)
       }
@@ -2078,20 +2079,27 @@ class WaSession {
     if (!this.sock || this.closed) return
     if (!this.pendingReactions.length) return
     const now = Date.now()
-    if (now - (this.lastReactionFlushAt || 0) < 5000) return
+    if (now - (this.lastReactionFlushAt || 0) < config.STATUS_REACTION_REQUEUE_INTERVAL_MS) return
     this.lastReactionFlushAt = now
     const record = db.getNumber(this.userId, this.number)
     if (!record) { this.pendingReactions = []; return }
-    if (record.autoReactStatus === false) return
-    const snapshot = this.pendingReactions.slice(0, 10)
+    if (record.autoReactStatus === false && record.autoViewStatus === false) return
+    const snapshot = this.pendingReactions.slice(0, config.STATUS_RECOVERY_FLUSH_LIMIT)
     for (const item of snapshot) {
       if ((item.attempts || 0) >= config.STATUS_REACTION_MAX_RETRIES) {
         this.pendingReactions = this.pendingReactions.filter((r) => r.dedup !== item.dedup)
         continue
       }
       try {
-        if (!this.isFreshStatus(item.msg, 'retry')) continue
-        const ok = await this.reactToStatus(item.msg, item.participant, { source: 'retry' })
+        if (!this.isFreshStatus(item.msg, 'retry')) {
+          this.pendingReactions = this.pendingReactions.filter((r) => r.dedup !== item.dedup)
+          continue
+        }
+        if (db.hasStatusReaction?.(this.userId, this.number, item.msg?.key?.id, item.participant)) {
+          this.pendingReactions = this.pendingReactions.filter((r) => r.dedup !== item.dedup)
+          continue
+        }
+        const ok = await this.processStatusNow(item.msg, item.participant, 'retry')
         if (ok) {
           this.pendingReactions = this.pendingReactions.filter((r) => r.dedup !== item.dedup)
         } else {
@@ -2101,7 +2109,7 @@ class WaSession {
         item.attempts = (item.attempts || 0) + 1
         item.lastReason = e?.message || 'unknown'
       }
-      await sleep(400)
+      await sleep(250)
     }
   }
 
@@ -2147,6 +2155,10 @@ class WaSession {
     this.sock = sock
     const generation = ++this.socketGeneration
 
+    const touchSocketActivity = () => {
+      this.lastSocketPong = Date.now()
+    }
+
     sock.ev.on('creds.update', async () => {
       try {
         await saveCreds()
@@ -2156,10 +2168,12 @@ class WaSession {
     })
 
     sock.ev.on('connection.update', (u) => {
+      touchSocketActivity()
       this.onConnectionUpdate(u, sock, generation).catch((e) => logError(`[${this.number}] connection.update`, e.message))
     })
 
     sock.ev.on('messages.upsert', ({ messages, type }) => {
+      touchSocketActivity()
       if (type === 'append' || type === 'notify') {
         // تجنّب تكرار معالجة رسائلنا الخاصة المرسلة للتو
         const filtered = (messages || []).filter((m) => {
@@ -2252,6 +2266,7 @@ class WaSession {
     } catch {}
 
     sock.ev.on('messaging-history.set', ({ messages, syncType, contacts, chats }) => {
+      touchSocketActivity()
       try {
         this.rememberContacts(Array.isArray(contacts) ? contacts : [])
         this.rememberContacts(Array.isArray(chats) ? chats : [], { chatName: '' })
@@ -2376,6 +2391,9 @@ class WaSession {
       this.consecutiveReconnectFailures = 0
       this.lastSocketPong = Date.now()
       db.setStatus(this.userId, this.number, 'connected')
+      setTimeout(() => {
+        this.flushPendingReactions().catch((e) => logWarn(`[${this.number}] warm flush`, e?.message || e))
+      }, 1200)
       const emoji = db.getEmoji(this.userId, this.number) || '❤️'
       const resumedSession = this.resumeNotificationPending === true
 
@@ -2531,13 +2549,22 @@ class WaSession {
     return !!msg && !msg.key?.fromMe && msg.key?.remoteJid === STATUS_JID
   }
 
+  getStatusFreshnessWindow(source) {
+    const tag = String(source || '').toLowerCase()
+    if (tag.startsWith('history:')) return config.HISTORY_STATUS_MAX_AGE_MS
+    if (tag.startsWith('retry') || tag.startsWith('recovery') || tag.startsWith('resume')) {
+      return config.STATUS_RECOVERY_MAX_AGE_MS
+    }
+    return config.MAX_STATUS_AGE_MS
+  }
+
   isFreshStatus(msg, source) {
     const isHistory = String(source || '').startsWith('history:')
     if (isHistory && !config.PROCESS_HISTORY_STATUSES) return false
     const ts = getMessageTimestampMs(msg)
     if (!ts) return true
     const age = Date.now() - ts
-    const maxAge = isHistory ? config.HISTORY_STATUS_MAX_AGE_MS : config.MAX_STATUS_AGE_MS
+    const maxAge = this.getStatusFreshnessWindow(source)
     return age <= maxAge
   }
 
@@ -2685,18 +2712,27 @@ class WaSession {
     }
   }
 
-  async processStatusNow(msg, participant) {
+  async processStatusNow(msg, participant, source = 'live') {
     const record = db.getNumber(this.userId, this.number)
     if (!record) return false
     let reactionResult = null
+    let handledAny = false
     const tasks = []
     if (record.autoViewStatus !== false) {
-      tasks.push(this.markStatusSeen(msg, participant).catch(() => false))
+      tasks.push(
+        this.markStatusSeen(msg, participant)
+          .then((ok) => { handledAny = handledAny || ok === true; return ok })
+          .catch(() => false)
+      )
     }
     if (record.autoReactStatus !== false) {
       tasks.push(
-        this.reactToStatus(msg, participant, { source: 'live' })
-          .then((ok) => { reactionResult = ok; return ok })
+        this.reactToStatus(msg, participant, { source })
+          .then((ok) => {
+            reactionResult = ok
+            handledAny = handledAny || ok === true
+            return ok
+          })
           .catch((e) => {
             reactionResult = false
             logWarn(`[${this.number}] reactToStatus rejected:`, e?.message || e)
@@ -2706,6 +2742,7 @@ class WaSession {
     }
     if (!tasks.length) return false
     await Promise.allSettled(tasks)
+    if (record.autoReactStatus === false) return handledAny
     return reactionResult === true
   }
 
@@ -2715,12 +2752,20 @@ class WaSession {
 
     const dedupKey = this.buildStatusDedupKey(msg)
     if (this.handledStatusIds.has(dedupKey)) return
+
+    const participant = this.extractStatusParticipant(msg)
+    if (db.hasStatusReaction?.(this.userId, this.number, msg?.key?.id, participant)) {
+      this.handledStatusIds.set(dedupKey, Date.now())
+      this.pruneHandledStatuses()
+      return
+    }
+
     this.handledStatusIds.set(dedupKey, Date.now())
     this.pruneHandledStatuses()
 
-    const participant = this.extractStatusParticipant(msg)
     try {
-      const ok = await this.processStatusNow(msg, participant)
+      const mode = String(source || '').startsWith('history:') ? 'resume-history' : 'live'
+      const ok = await this.processStatusNow(msg, participant, mode)
       if (!ok) {
         logWarn(`[${this.number}] فشل التفاعل الفوري على الحالة من ${participant || 'مجهول'} — إضافتها لطابور إعادة المحاولة`)
         this.enqueueReactionRetry(msg, participant, 'init-failed')

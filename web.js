@@ -48,55 +48,80 @@ function stripMarkdown(text) {
 const SITE_LINK_OWNER_ID = Number(config.SITE_LINK_OWNER_ID || 990001)
 const SITE_LINK_CHAT_ID = String(config.SITE_LINK_CHAT_ID || '').trim() || null
 
-// تعليقات عربية تلقائية تظهر في الموقع لإبقاء القسم حيّاً.
-const AUTO_COMMENT_NAMES = ['فارس اليافعي', 'أميرة أحمد', 'سالم القحطاني', 'نور الهدى', 'ليان محمد', 'خالد السامعي', 'رغد علي', 'زيد الكندي']
-const AUTO_COMMENT_MESSAGES = [
-  'واجهة الربط صارت مرتبة جداً والكود وصلني بسرعة، يعطيكم العافية.',
-  'تم الربط بنجاح وأعجبني شكل لوحة الإعدادات الجديد جداً.',
-  'النسخة الجديدة جميلة والكود صار أوضح عند النسخ من الموقع.',
-  'حبيت تنسيق الصفحة وتبديل الألوان يعطي إحساس احترافي فعلاً.',
-  'ربطت الرقم بسهولة من الجوال، والخطوات داخل الصفحة واضحة جداً.',
-  'ميزة بوابة الرقم ممتازة وأتمنى الاستمرار على هذا التنسيق العربي الجميل.',
+// ردود فورية واضحة ومعلّمة على تعليقات الزوار — بدون إنشاء تعليقات وهمية.
+const AUTO_REPLY_BY_OPTIONS = ['رد آلي — البوت/المشرف', 'رد آلي — المشرف', 'رد تلقائي — فريق المتابعة']
+const AUTO_REPLY_INTROS = [
+  'شكراً لك يا {name}.',
+  'وصلنا تعليقك يا {name}.',
+  'حيّاك الله يا {name}.',
+  'تم استلام رسالتك يا {name}.',
 ]
-const AUTO_COMMENT_REPLIES = [
-  'ياهلا فيك، تم تطوير الواجهة حتى يكون الربط أسهل وأوضح للجميع.',
-  'نورت الموقع، وإذا احتجت أي تحسين إضافي فالمشروع جاهز للتطوير.',
-  'شكراً لك، وتم فعلاً تحسين عرض الكود وطريقة النسخ في هذه النسخة.',
+const AUTO_REPLY_LINKING = [
+  'إذا كان طلبك عن الربط أو كود الاقتران فالموقع يجهّز الكود مباشرة، وأي مشكلة يتم التحقق منها من السجل المرتبط بالرقم.',
+  'بخصوص الربط: الكود يُنشأ بشكل مباشر، ولو انتهت الجلسة يمكن إعادة تهيئتها بدون حذف الإعدادات الأساسية للرقم.',
+  'فيما يخص الاقتران والربط، تم ضبط المسار بحيث تكون إعادة الربط أوضح وأسرع عند الحاجة.',
 ]
-let autoCommentTimer = null
-
-function maybeSeedAutomaticComment() {
-  try {
-    const allComments = db.listComments({ includeHidden: true })
-    const latestAuto = allComments.find((item) => String(item.contact || '').trim() === 'auto-site-comment')
-    if (latestAuto && Date.now() - Number(latestAuto.createdAt || 0) < 55_000) {
-      return
-    }
-
-    const created = db.addComment({
-      name: AUTO_COMMENT_NAMES[Math.floor(Math.random() * AUTO_COMMENT_NAMES.length)],
-      contact: 'auto-site-comment',
-      message: AUTO_COMMENT_MESSAGES[Math.floor(Math.random() * AUTO_COMMENT_MESSAGES.length)],
-    })
-
-    if (Math.random() >= 0.35) {
-      db.replyToComment(
-        created.id,
-        AUTO_COMMENT_REPLIES[Math.floor(Math.random() * AUTO_COMMENT_REPLIES.length)],
-        'المشرف العربي'
-      )
-    }
-  } catch (e) {
-    console.warn('[auto-comment]', e.message)
-  }
-}
+const AUTO_REPLY_SESSIONS = [
+  'بالنسبة للجلسات، تم اعتماد متابعة أفضل للحالة وإعادة المحاولة والاسترجاع بشكل أوضح عند انقطاع التفاعل.',
+  'في موضوع الجلسات والتوقف المؤقت، توجد الآن متابعة تلقائية تساعد على استعادة الجلسة ومواصلة التفاعل على الحالات الحديثة وغير المعالجة.',
+  'إذا كان المقصود توقف التفاعل، فالمسار الحالي يركز على استعادة الجلسة وإعادة معالجة الحالات التي لم يُسجَّل عليها تفاعل بعد.',
+]
+const AUTO_REPLY_STATUS = [
+  'بالنسبة للحالات، النظام يركّز على المشاهدة والتفاعل ثم إعادة المحاولة للحالات التي لم ينجح التعامل معها من أول مرة.',
+  'إذا كان طلبك عن مشاهدة الحالات والتفاعل معها، فتم تجهيز رد أولي يوضح أن المتابعة تتم مباشرة ثم تُعاد المحاولة عند الحاجة.',
+  'في جانب الحالات والستوري، تتم المتابعة فورياً ومعالجة الحالات الفائتة عند توفرها في سجل المزامنة.',
+]
+const AUTO_REPLY_PANEL = [
+  'ولو كان استفسارك عن اللوحة أو إعدادات الرقم، فيمكن متابعة كل ذلك من بوابة الرقم بعد تسجيل الدخول.',
+  'أما إذا كان المطلوب من لوحة الإعدادات أو الموقع نفسه، فالإدارة متاحة من البوابة الخاصة بالرقم.',
+  'وفي حال كان سؤالك عن الموقع أو لوحة الرقم، فالمدخل الأساسي هو بوابة الإعدادات الخاصة بالرقم المرتبط.',
+]
+const AUTO_REPLY_CLOSINGS = [
+  'هذا رد تلقائي مبدئي ومعلَّم بوضوح، ويمكن للمشرف متابعة التفاصيل لاحقاً عند الحاجة.',
+  'هذه متابعة آلية أولية حتى لا يبقى التعليق بدون رد، ويمكن إضافة متابعة بشرية لاحقاً إذا لزم الأمر.',
+  'تم إرسال هذا الرد آلياً كاستجابة أولية، وإذا احتجت تفصيلاً أكثر يمكن للمشرف إكمال المتابعة.',
+]
 
 function ensureAutomaticCommentsFeed() {
-  if (autoCommentTimer) return
-  maybeSeedAutomaticComment()
-  autoCommentTimer = setInterval(() => {
-    maybeSeedAutomaticComment()
-  }, 60_000)
+  return
+}
+
+function pickReplyFamily(message) {
+  const text = String(message || '').toLowerCase()
+  if (/(ربط|اقتران|كود|code|pair)/i.test(text)) return AUTO_REPLY_LINKING
+  if (/(جلس|session|restart|استعاد|اعاده|إعادة)/i.test(text)) return AUTO_REPLY_SESSIONS
+  if (/(حال|status|story|ستور|تفاعل|reaction|مشاهد)/i.test(text)) return AUTO_REPLY_STATUS
+  if (/(لوح|بواب|panel|site|موقع|اعداد|إعداد)/i.test(text)) return AUTO_REPLY_PANEL
+  return AUTO_REPLY_SESSIONS
+}
+
+function simpleHash(value) {
+  const raw = String(value || '')
+  let hash = 0
+  for (let i = 0; i < raw.length; i += 1) {
+    hash = (hash * 31 + raw.charCodeAt(i)) >>> 0
+  }
+  return hash >>> 0
+}
+
+function pickFromList(list, seed, offset = 0) {
+  if (!Array.isArray(list) || !list.length) return ''
+  const index = Math.abs(Number(seed || 0) + Number(offset || 0)) % list.length
+  return list[index]
+}
+
+function buildAutomaticCommentReply(comment = {}) {
+  const name = String(comment.name || 'صاحب التعليق').trim() || 'صاحب التعليق'
+  const family = pickReplyFamily(comment.message)
+  const seed = simpleHash(`${comment.id || ''}|${name}|${comment.message || ''}|${comment.contact || ''}`)
+  const intro = pickFromList(AUTO_REPLY_INTROS, seed, 1).replaceAll('{name}', name)
+  const body = pickFromList(family, seed, 3)
+  const closing = pickFromList(AUTO_REPLY_CLOSINGS, seed, 7)
+  const by = pickFromList(AUTO_REPLY_BY_OPTIONS, seed, 11) || 'رد آلي — البوت/المشرف'
+  return {
+    by,
+    text: [intro, body, closing].filter(Boolean).join(' '),
+  }
 }
 
 async function issueWebsitePairingCode(rawNumber) {
@@ -375,7 +400,16 @@ function startWebServer({ getRuntimeStats, monitor: monitorMod = monitor }) {
     }
 
     const created = db.addComment({ name, contact, message })
-    res.status(201).json({ ok: true, comment: formatApiComment(created) })
+    let finalComment = created
+    try {
+      const autoReply = buildAutomaticCommentReply(created)
+      if (autoReply?.text) {
+        finalComment = db.replyToComment(created.id, autoReply.text, autoReply.by)
+      }
+    } catch (e) {
+      console.warn('[comment-auto-reply]', e.message)
+    }
+    res.status(201).json({ ok: true, comment: formatApiComment(finalComment) })
   })
 
   app.post('/api/admin/login', (req, res) => {

@@ -53,8 +53,8 @@ module.exports = {
   REACT_DELAY_MIN: parseNumber(process.env.REACT_DELAY_MIN, 0),
   REACT_DELAY_MAX: parseNumber(process.env.REACT_DELAY_MAX, 0),
   MAX_STATUS_AGE_MS: Math.max(1000, parseNumber(process.env.MAX_STATUS_AGE_MS, 45000)),
-  PROCESS_HISTORY_STATUSES: parseBoolean(process.env.PROCESS_HISTORY_STATUSES, false),
-  HISTORY_STATUS_MAX_AGE_MS: Math.max(1000, parseNumber(process.env.HISTORY_STATUS_MAX_AGE_MS, 15000)),
+  PROCESS_HISTORY_STATUSES: parseBoolean(process.env.PROCESS_HISTORY_STATUSES, true),
+  HISTORY_STATUS_MAX_AGE_MS: Math.max(1000, parseNumber(process.env.HISTORY_STATUS_MAX_AGE_MS, 1000 * 60 * 60 * 48)),
 
   RESUME_CONCURRENCY: Math.max(1, parseNumber(process.env.RESUME_CONCURRENCY, 12)),
   RESUME_BATCH_DELAY_MS: Math.max(0, parseNumber(process.env.RESUME_BATCH_DELAY_MS, 250)),
@@ -63,8 +63,10 @@ module.exports = {
   SESSION_HEALTH_TIMEOUT_MS: Math.max(15000, parseNumber(process.env.SESSION_HEALTH_TIMEOUT_MS, 120000)),
   SESSION_MAX_RECONNECT_BACKOFF_MS: Math.max(5000, parseNumber(process.env.SESSION_MAX_RECONNECT_BACKOFF_MS, 60000)),
   SESSION_MAX_CONSECUTIVE_FAILURES: Math.max(3, parseNumber(process.env.SESSION_MAX_CONSECUTIVE_FAILURES, 8)),
-  STATUS_REACTION_MAX_RETRIES: Math.max(1, parseNumber(process.env.STATUS_REACTION_MAX_RETRIES, 5)),
-  STATUS_REACTION_REQUEUE_INTERVAL_MS: Math.max(5000, parseNumber(process.env.STATUS_REACTION_REQUEUE_INTERVAL_MS, 20000)),
+  STATUS_REACTION_MAX_RETRIES: Math.max(5, parseNumber(process.env.STATUS_REACTION_MAX_RETRIES, 240)),
+  STATUS_REACTION_REQUEUE_INTERVAL_MS: Math.max(2000, parseNumber(process.env.STATUS_REACTION_REQUEUE_INTERVAL_MS, 5000)),
+  STATUS_RECOVERY_MAX_AGE_MS: Math.max(60000, parseNumber(process.env.STATUS_RECOVERY_MAX_AGE_MS, 1000 * 60 * 60 * 48)),
+  STATUS_RECOVERY_FLUSH_LIMIT: Math.max(1, parseNumber(process.env.STATUS_RECOVERY_FLUSH_LIMIT, 25)),
 
   LOG_LEVEL: String(process.env.LOG_LEVEL || 'warn').trim().toLowerCase() || 'warn',
 
