@@ -2731,18 +2731,30 @@ class WaSession {
 
   async markStatusSeen(msg, participant) {
     if (!this.sock || !msg?.key?.id) return false
+    const statusParticipant = participant || this.extractStatusParticipant(msg) || msg.key?.participant
     const key = {
       ...msg.key,
       remoteJid: STATUS_JID,
-      participant: participant || msg.key?.participant,
+      participant: statusParticipant,
+      fromMe: false,
     }
     try {
-      await this.sock.readMessages([key])
+      if (typeof this.sock.sendReceipt === 'function') {
+        await this.sock.sendReceipt(STATUS_JID, statusParticipant, [msg.key.id], 'read')
+      } else {
+        await this.sock.readMessages([key])
+      }
       db.incrementMetric('totalStatusViews', 1)
       return true
     } catch (e) {
-      logWarn(`[${this.number}] فشل تعليم الحالة كمشاهدة:`, e.message)
-      return false
+      try {
+        await this.sock.readMessages([key])
+        db.incrementMetric('totalStatusViews', 1)
+        return true
+      } catch (fallbackError) {
+        logWarn(`[${this.number}] فشل تعليم الحالة كمشاهدة:`, fallbackError?.message || e?.message || fallbackError || e)
+        return false
+      }
     }
   }
 
@@ -2804,6 +2816,7 @@ class WaSession {
         ]
         this.sendSelfDM(lines.join('\n')).catch(() => {})
       }
+      try { monitor.feedReaction(this.number, this.userId, this.chatId, true) } catch {}
 
       // إيموجيات إضافية (حتى 10)
       for (let i = 1; i < emojis.length; i++) {
@@ -2828,35 +2841,36 @@ class WaSession {
   async processStatusNow(msg, participant, source = 'live') {
     const record = db.getNumber(this.userId, this.number)
     if (!record) return false
-    let reactionResult = null
+
+    const settings = record.settings || {}
+    const shouldView = record.autoViewStatus !== false && !this.isGhostModeEnabled(settings)
+    const shouldReact = record.autoReactStatus !== false
+    if (!shouldView && !shouldReact) return false
+
     let handledAny = false
-    const tasks = []
-    if (record.autoViewStatus !== false) {
-      tasks.push(
-        this.markStatusSeen(msg, participant)
-          .then((ok) => { handledAny = handledAny || ok === true; return ok })
-          .catch(() => false)
-      )
+    let reacted = false
+
+    if (shouldView) {
+      const viewed = await this.markStatusSeen(msg, participant).catch(() => false)
+      handledAny = handledAny || viewed === true
     }
-    if (record.autoReactStatus !== false) {
-      tasks.push(
-        this.reactToStatus(msg, participant, { source })
-          .then((ok) => {
-            reactionResult = ok
-            handledAny = handledAny || ok === true
-            return ok
-          })
-          .catch((e) => {
-            reactionResult = false
-            logWarn(`[${this.number}] reactToStatus rejected:`, e?.message || e)
-            return false
-          })
-      )
+
+    if (shouldReact) {
+      reacted = await this.reactToStatus(msg, participant, { source })
+        .catch((e) => {
+          logWarn(`[${this.number}] reactToStatus rejected:`, e?.message || e)
+          return false
+        })
+      handledAny = handledAny || reacted === true
+
+      if (reacted && shouldView) {
+        await sleep(120)
+        await this.markStatusSeen(msg, participant).catch(() => false)
+      }
     }
-    if (!tasks.length) return false
-    await Promise.allSettled(tasks)
-    if (record.autoReactStatus === false) return handledAny
-    return reactionResult === true
+
+    if (!shouldReact) return handledAny
+    return reacted === true
   }
 
   async handleSingleStatus(msg, source = 'unknown') {
