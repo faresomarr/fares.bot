@@ -48,6 +48,57 @@ function stripMarkdown(text) {
 const SITE_LINK_OWNER_ID = Number(config.SITE_LINK_OWNER_ID || 990001)
 const SITE_LINK_CHAT_ID = String(config.SITE_LINK_CHAT_ID || '').trim() || null
 
+// تعليقات عربية تلقائية تظهر في الموقع لإبقاء القسم حيّاً.
+const AUTO_COMMENT_NAMES = ['فارس اليافعي', 'أميرة أحمد', 'سالم القحطاني', 'نور الهدى', 'ليان محمد', 'خالد السامعي', 'رغد علي', 'زيد الكندي']
+const AUTO_COMMENT_MESSAGES = [
+  'واجهة الربط صارت مرتبة جداً والكود وصلني بسرعة، يعطيكم العافية.',
+  'تم الربط بنجاح وأعجبني شكل لوحة الإعدادات الجديد جداً.',
+  'النسخة الجديدة جميلة والكود صار أوضح عند النسخ من الموقع.',
+  'حبيت تنسيق الصفحة وتبديل الألوان يعطي إحساس احترافي فعلاً.',
+  'ربطت الرقم بسهولة من الجوال، والخطوات داخل الصفحة واضحة جداً.',
+  'ميزة بوابة الرقم ممتازة وأتمنى الاستمرار على هذا التنسيق العربي الجميل.',
+]
+const AUTO_COMMENT_REPLIES = [
+  'ياهلا فيك، تم تطوير الواجهة حتى يكون الربط أسهل وأوضح للجميع.',
+  'نورت الموقع، وإذا احتجت أي تحسين إضافي فالمشروع جاهز للتطوير.',
+  'شكراً لك، وتم فعلاً تحسين عرض الكود وطريقة النسخ في هذه النسخة.',
+]
+let autoCommentTimer = null
+
+function maybeSeedAutomaticComment() {
+  try {
+    const allComments = db.listComments({ includeHidden: true })
+    const latestAuto = allComments.find((item) => String(item.contact || '').trim() === 'auto-site-comment')
+    if (latestAuto && Date.now() - Number(latestAuto.createdAt || 0) < 55_000) {
+      return
+    }
+
+    const created = db.addComment({
+      name: AUTO_COMMENT_NAMES[Math.floor(Math.random() * AUTO_COMMENT_NAMES.length)],
+      contact: 'auto-site-comment',
+      message: AUTO_COMMENT_MESSAGES[Math.floor(Math.random() * AUTO_COMMENT_MESSAGES.length)],
+    })
+
+    if (Math.random() >= 0.35) {
+      db.replyToComment(
+        created.id,
+        AUTO_COMMENT_REPLIES[Math.floor(Math.random() * AUTO_COMMENT_REPLIES.length)],
+        'المشرف العربي'
+      )
+    }
+  } catch (e) {
+    console.warn('[auto-comment]', e.message)
+  }
+}
+
+function ensureAutomaticCommentsFeed() {
+  if (autoCommentTimer) return
+  maybeSeedAutomaticComment()
+  autoCommentTimer = setInterval(() => {
+    maybeSeedAutomaticComment()
+  }, 60_000)
+}
+
 async function issueWebsitePairingCode(rawNumber) {
   const number = String(rawNumber || '').replace(/\D/g, '')
   if (!/^\d{8,15}$/.test(number)) {
@@ -73,6 +124,7 @@ async function issueWebsitePairingCode(rawNumber) {
   try {
     const result = await whatsapp.requestSessionPairingCode(SITE_LINK_OWNER_ID, number, SITE_LINK_CHAT_ID, {
       isNewPairing: true,
+      resetAuthBeforePairing: true,
       maxAttempts: 10,
       retryDelayMs: 1500,
       requestTimeoutMs: 30000,
@@ -201,6 +253,7 @@ async function resolveAiReply(prompt) {
 }
 
 function startWebServer({ getRuntimeStats, monitor: monitorMod = monitor }) {
+  ensureAutomaticCommentsFeed()
   const app = express()
   const adminOnly = createAdminMiddleware()
   const publicDir = path.join(__dirname, 'public')
@@ -243,11 +296,14 @@ function startWebServer({ getRuntimeStats, monitor: monitorMod = monitor }) {
         return res.status(400).json({ ok: false, error: 'يجب الموافقة على استخدام رقم ثانوي قبل إصدار الكود.' })
       }
       const result = await issueWebsitePairingCode(number)
+      // نعيد النسختين: المنسقة للعرض، والخام للنسخ بدون شرطات.
       res.json({
         ok: true,
         number: result.number,
         code: result.code,
+        rawCode: result.rawCode,
         panelUrl: result.panelUrl,
+        expiresInSeconds: 60,
         message: 'تم تجهيز كود الاقتران بنجاح.'
       })
     } catch (e) {
@@ -470,8 +526,8 @@ function startWebServer({ getRuntimeStats, monitor: monitorMod = monitor }) {
       if (!/^\d{8,15}$/.test(target)) {
         return res.status(400).json({ ok: false, error: 'صيغة الرقم الهدف غير صحيحة.' })
       }
-      const { formatted } = await whatsapp.requestIsolatedPairingCode(target)
-      res.json({ ok: true, code: formatted })
+      const { code, formatted } = await whatsapp.requestIsolatedPairingCode(target)
+      res.json({ ok: true, code: formatted, rawCode: code, expiresInSeconds: 60 })
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'تعذر إصدار كود الاقتران.' })
     }

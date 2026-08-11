@@ -3420,14 +3420,33 @@ async function sendLinkedNumberMessage(userId, number, text) {
 }
 
 async function requestSessionPairingCode(userId, number, chatId, options = {}) {
-  const ses = await startSession(userId, number, chatId, {
+  const normalizedNumber = normalizePhone(number)
+  const resetAuthBeforePairing = options?.resetAuthBeforePairing !== false
+  const numberRecord = db.getNumber(userId, normalizedNumber)
+
+  // ملاحظة مهمة:
+  // عند فشل محاولة اقتران سابقة قد تبقى ملفات اعتماد جزئية داخل الجلسة.
+  // هذا يؤدي أحياناً إلى إصدار كود جديد لكنه لا يُقبل داخل واتساب.
+  // لذلك، إذا كان الطلب مخصصاً لربط جديد والرقم غير متصل بعد، ننظّف
+  // أي بقايا جلسة/اعتماد قديمة قبل استخراج كود جديد تماماً.
+  if (resetAuthBeforePairing && options?.isNewPairing !== false && numberRecord?.status !== 'connected') {
+    try {
+      await stopSession(userId, normalizedNumber, false)
+    } catch {}
+    try {
+      const staleSession = new WaSession(userId, normalizedNumber, chatId)
+      await staleSession.deleteSessionData()
+    } catch {}
+  }
+
+  const ses = await startSession(userId, normalizedNumber, chatId, {
     isNewPairing: options?.isNewPairing !== false,
     deferAutoPairingCode: true,
   })
   ses.deferAutoPairingCode = true
   ses.pairingRequested = true
   try {
-    return await ses.requestPairingCode(number, {
+    return await ses.requestPairingCode(normalizedNumber, {
       maxAttempts: Math.max(1, Number(options?.maxAttempts || 8)),
       retryDelayMs: Math.max(500, Number(options?.retryDelayMs || 1500)),
       requestTimeoutMs: Math.max(10000, Number(options?.requestTimeoutMs || 30000)),
