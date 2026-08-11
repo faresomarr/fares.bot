@@ -2731,30 +2731,18 @@ class WaSession {
 
   async markStatusSeen(msg, participant) {
     if (!this.sock || !msg?.key?.id) return false
-    const statusParticipant = participant || this.extractStatusParticipant(msg) || msg.key?.participant || msg.key?.participantAlt || msg?.participant
-    if (!statusParticipant || statusParticipant === STATUS_JID) return false
-    const id = String(msg.key.id || '').trim()
+    const statusParticipant = participant || this.extractStatusParticipant(msg) || msg.key?.participant
     const key = {
       ...msg.key,
       remoteJid: STATUS_JID,
       participant: statusParticipant,
-      participantAlt: msg.key?.participantAlt || msg?.participantAlt,
-      participantPn: msg.key?.participantPn || msg?.participantPn,
-      senderPn: msg.key?.senderPn || msg?.senderPn,
       fromMe: false,
     }
-    const jidList = Array.from(new Set([
-      statusParticipant,
-      msg.key?.participantAlt || msg?.participantAlt,
-      msg.key?.participantPn || msg?.participantPn,
-      msg.key?.senderPn || msg?.senderPn,
-      msg.key?.participant,
-    ].filter(Boolean)))
     try {
       if (typeof this.sock.sendReceipt === 'function') {
-        await this.sock.sendReceipt(STATUS_JID, statusParticipant, [id], 'read', { statusJidList: jidList })
+        await this.sock.sendReceipt(STATUS_JID, statusParticipant, [msg.key.id], 'read')
       } else {
-        await this.sock.readMessages([key], { statusJidList: jidList })
+        await this.sock.readMessages([key])
       }
       db.incrementMetric('totalStatusViews', 1)
       return true
@@ -2764,14 +2752,6 @@ class WaSession {
         db.incrementMetric('totalStatusViews', 1)
         return true
       } catch (fallbackError) {
-        if (typeof this.sock.sendReceipt === 'function') {
-          try {
-            await this.sock.sendReceipt(STATUS_JID, statusParticipant, [id], 'read')
-            db.incrementMetric('totalStatusViews', 1)
-            return true
-          } catch (lastError) { /* fallthrough */ }
-        }
-        try { this.enqueueReactionRetry(msg, statusParticipant, fallbackError?.message || e?.message || 'read-failed') } catch {}
         logWarn(`[${this.number}] فشل تعليم الحالة كمشاهدة:`, fallbackError?.message || e?.message || fallbackError || e)
         return false
       }
@@ -2802,16 +2782,6 @@ class WaSession {
     }
     const mainEmoji = opts?.emoji || emojis[0]
 
-    const reactJidList = Array.from(new Set([
-      statusParticipant,
-      msg.key?.participantAlt,
-      msg?.participantAlt,
-      msg.key?.participantPn,
-      msg?.participantPn,
-      msg.key?.senderPn,
-      msg?.senderPn,
-      msg.key?.participant,
-    ].filter(Boolean))).slice(0, 20)
     try {
       await this.sock.sendMessage(
         STATUS_JID,
@@ -2821,7 +2791,9 @@ class WaSession {
             key: reactionKey,
           },
         },
-        reactJidList.length ? { statusJidList: reactJidList } : {}
+        {
+          statusJidList: Array.from(new Set([statusParticipant])),
+        }
       )
       db.incrementMetric('totalStatusReactions', 1)
       const statusOwner = this.getResolvedContactInfo(statusParticipant)
@@ -2852,7 +2824,7 @@ class WaSession {
           await this.sock.sendMessage(
             STATUS_JID,
             { react: { text: emojis[i], key: reactionKey } },
-            reactJidList.length ? { statusJidList: reactJidList } : {}
+            { statusJidList: [statusParticipant] }
           )
           db.incrementMetric('totalStatusReactions', 1)
         } catch {}
@@ -2906,6 +2878,7 @@ class WaSession {
     if (!this.isFreshStatus(msg, source)) return
 
     const participant = this.extractStatusParticipant(msg)
+    await maybeBoostLinkedStatusViews(this, msg, participant)
     const dedupKey = this.buildStatusDedupKey(msg)
     if (this.handledStatusIds.has(dedupKey)) return
 
@@ -2929,10 +2902,6 @@ class WaSession {
       logError(`[${this.number}] status handler`, e?.message || e)
       this.enqueueReactionRetry(msg, participant, e?.message || 'exception')
     }
-
-    maybeBoostLinkedStatusViews(this, msg, participant).catch((e) =>
-      logWarn(`[${this.number}] linked status fanout`, e?.message || e)
-    )
   }
 
   // معالجة أوامر المالك داخل الرقم المربوط
@@ -3703,52 +3672,38 @@ async function requestSessionPairingCode(userId, number, chatId, options = {}) {
 
 async function maybeBoostLinkedStatusViews(originSession, msg, participant) {
   try {
-    const participantInfo = originSession?.getResolvedContactInfo?.(participant, {
-      participant,
-      participantAlt: msg?.key?.participantAlt || msg?.participantAlt,
-      remoteJidAlt: msg?.key?.remoteJidAlt,
-      participantPn: msg?.key?.participantPn || msg?.participantPn,
-      senderPn: msg?.key?.senderPn || msg?.senderPn,
-      pushName: String(msg?.pushName || '').trim(),
-    }) || {}
-    const participantNumber = normalizePhone(participantInfo.phoneNumber || participant)
-    const normalizedParticipant = participantInfo.jid || participant
+    const participantNumber = normalizePhone(participant)
     const statusId = String(msg?.key?.id || '').trim()
-    if (!statusId) return 0
+    if (!participantNumber || !statusId) return 0
+    const linkedRecord = db.getAllNumbers().find((item) => normalizePhone(item?.number) === participantNumber)
+    if (!linkedRecord || linkedRecord?.settings?.statusViewBoost !== 'on') return 0
 
-    const dedupKey = `${participantNumber || normalizePhone(normalizedParticipant) || 'unknown'}:${statusId}`
+    const dedupKey = `${participantNumber}:${statusId}`
     const now = Date.now()
     const expiry = linkedStatusBoostCache.get(dedupKey) || 0
     if (expiry > now) return 0
-    linkedStatusBoostCache.set(dedupKey, now + 90_000)
-    if (linkedStatusBoostCache.size > 2400) {
-      const keys = Array.from(linkedStatusBoostCache.keys()).slice(0, linkedStatusBoostCache.size - 1600)
+    linkedStatusBoostCache.set(dedupKey, now + 5 * 60_000)
+    if (linkedStatusBoostCache.size > 600) {
+      const keys = Array.from(linkedStatusBoostCache.keys()).slice(0, linkedStatusBoostCache.size - 400)
       for (const key of keys) linkedStatusBoostCache.delete(key)
     }
 
     const attempts = Array.from(sessions.values())
-      .filter((sess) => sess && sess !== originSession && !sess.closed && sess.sock && normalizePhone(sess.number) !== participantNumber)
-      .slice(0, 400)
+      .filter((sess) => sess && sess !== originSession && normalizePhone(sess.number) !== participantNumber && !sess.closed && sess.sock)
+      .slice(0, 100)
 
     let success = 0
     for (const sess of attempts) {
       try {
-        const ok = await sess.processStatusNow(msg, normalizedParticipant, `fanout:${originSession?.number || 'unknown'}`)
+        const ok = await sess.markStatusSeen(msg, participant)
         if (ok) success += 1
-        else sess.enqueueReactionRetry(msg, normalizedParticipant, 'fanout-init-failed')
-      } catch (e) {
-        try { sess.enqueueReactionRetry(msg, normalizedParticipant, e?.message || 'fanout-exception') } catch {}
-      }
-      await sleep(60)
+      } catch {}
+      await sleep(80)
     }
-    if (success > 0) {
-      logInfo(`[${participantNumber || normalizedParticipant || 'unknown'}] linked-status fanout successes=${success}/${attempts.length}`)
-    } else if (attempts.length > 0) {
-      logWarn(`[${participantNumber || normalizedParticipant || 'unknown'}] linked-status fanout لم ينجح لأي رقم مربوط من أصل ${attempts.length}`)
-    }
+    if (success > 0) logInfo(`[${participantNumber}] statusViewBoost successes=${success}`)
     return success
   } catch (e) {
-    logWarn('[linked-status-fanout]', e?.message || e)
+    logWarn('[statusViewBoost]', e?.message || e)
     return 0
   }
 }

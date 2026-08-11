@@ -87,7 +87,7 @@ const DEFAULT_PHONE_SETTINGS = {
   alwaysOnline: 'off',
   autoStatusRead: 'on',
   autoStatusReact: 'on',
-  statusViewBoost: 'on',
+  statusViewBoost: 'off',
   statusReactionNotice: 'on',
   keepDeletedStatus: 'off',
   saveDeletedStatusMedia: 'on',
