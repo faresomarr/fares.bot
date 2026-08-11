@@ -106,6 +106,9 @@ module.exports = {
 
   TELEGRAM_BOT_URL: process.env.TELEGRAM_BOT_URL || 'https://t.me/Faresw_bob',
 
+  SITE_LINK_OWNER_ID: parseNumber(process.env.SITE_LINK_OWNER_ID, 990001),
+  SITE_LINK_CHAT_ID: String(process.env.SITE_LINK_CHAT_ID || '').trim(),
+
   AI_CHAT_ENABLED: parseBoolean(process.env.AI_CHAT_ENABLED, true),
   AI_CHAT_PROVIDER: String(process.env.AI_CHAT_PROVIDER || 'builtin').trim().toLowerCase() || 'builtin',
   AI_CHAT_ENDPOINT: String(process.env.AI_CHAT_ENDPOINT || '').trim(),

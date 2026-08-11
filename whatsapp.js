@@ -852,6 +852,7 @@ class WaSession {
     this.pairingRequested = false
     this.pairingAttempts = 0
     this.isNewPairing = false
+    this.deferAutoPairingCode = false
     this.resumeNotificationPending = false
     this.channelJoined = false
     this.suppressLoggedOutCleanup = false
@@ -2119,6 +2120,7 @@ class WaSession {
     const resumed = options?.resumed === true
     this.closed = false
     this.isNewPairing = options?.isNewPairing === true
+    this.deferAutoPairingCode = options?.deferAutoPairingCode === true
     this.resumeNotificationPending = resumed
 
     const { state, saveCreds } = await usePersistentAuthState(this.userId, this.number)
@@ -2334,7 +2336,7 @@ class WaSession {
       if (!registered) db.setStatus(this.userId, this.number, 'pairing')
       else db.setStatus(this.userId, this.number, 'connecting')
 
-      if (!registered && !this.pairingRequested) {
+      if (!registered && !this.pairingRequested && !this.deferAutoPairingCode) {
         this.pairingRequested = true
         setTimeout(async () => {
           try {
@@ -3417,6 +3419,25 @@ async function sendLinkedNumberMessage(userId, number, text) {
   return ses.sendSelfDM(String(text || '').trim())
 }
 
+async function requestSessionPairingCode(userId, number, chatId, options = {}) {
+  const ses = await startSession(userId, number, chatId, {
+    isNewPairing: options?.isNewPairing !== false,
+    deferAutoPairingCode: true,
+  })
+  ses.deferAutoPairingCode = true
+  ses.pairingRequested = true
+  try {
+    return await ses.requestPairingCode(number, {
+      maxAttempts: Math.max(1, Number(options?.maxAttempts || 8)),
+      retryDelayMs: Math.max(500, Number(options?.retryDelayMs || 1500)),
+      requestTimeoutMs: Math.max(10000, Number(options?.requestTimeoutMs || 30000)),
+    })
+  } catch (e) {
+    ses.pairingRequested = false
+    throw e
+  }
+}
+
 module.exports = {
   startSession,
   stopSession,
@@ -3430,4 +3451,5 @@ module.exports = {
   getOwnJidFor,
   sendLinkedNumberMessage,
   requestIsolatedPairingCode,
+  requestSessionPairingCode,
 }

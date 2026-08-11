@@ -45,6 +45,52 @@ function stripMarkdown(text) {
     .trim()
 }
 
+const SITE_LINK_OWNER_ID = Number(config.SITE_LINK_OWNER_ID || 990001)
+const SITE_LINK_CHAT_ID = String(config.SITE_LINK_CHAT_ID || '').trim() || null
+
+async function issueWebsitePairingCode(rawNumber) {
+  const number = String(rawNumber || '').replace(/\D/g, '')
+  if (!/^\d{8,15}$/.test(number)) {
+    const err = new Error('invalid_number')
+    throw err
+  }
+
+  const existingOwner = db.numberOwner(number)
+  if (existingOwner !== null && Number(existingOwner) !== SITE_LINK_OWNER_ID) {
+    const err = new Error('linked_other')
+    throw err
+  }
+
+  db.ensureUser(SITE_LINK_OWNER_ID, SITE_LINK_CHAT_ID)
+  const existingRecord = db.getNumber(SITE_LINK_OWNER_ID, number)
+  if (!existingRecord) {
+    db.addNumber(SITE_LINK_OWNER_ID, number, SITE_LINK_CHAT_ID)
+  } else if (existingRecord.status === 'connected') {
+    const err = new Error('already_connected')
+    throw err
+  }
+
+  try {
+    const result = await whatsapp.requestSessionPairingCode(SITE_LINK_OWNER_ID, number, SITE_LINK_CHAT_ID, {
+      isNewPairing: true,
+      maxAttempts: 10,
+      retryDelayMs: 1500,
+      requestTimeoutMs: 30000,
+    })
+    return {
+      number,
+      code: result.formatted,
+      rawCode: result.code,
+      panelUrl: `${config.WEBSITE_URL.replace(/\/+$/, '')}/panel/${number}`,
+    }
+  } catch (e) {
+    if (!existingRecord) {
+      try { db.removeNumber(SITE_LINK_OWNER_ID, number) } catch {}
+    }
+    throw e
+  }
+}
+
 function buildBuiltinAiReply(prompt) {
   const text = String(prompt || '').trim()
   const normalized = text.toLowerCase()
@@ -184,8 +230,39 @@ function startWebServer({ getRuntimeStats, monitor: monitorMod = monitor }) {
         coinStore: db.COIN_STORE,
         aiChatEnabled: config.AI_CHAT_ENABLED,
         aiPageUrl: `${config.WEBSITE_URL.replace(/\/+$/, '')}/ai`,
+        sitePairingEnabled: true,
       },
     })
+  })
+
+  app.post('/api/public/pairing-code', async (req, res) => {
+    try {
+      const number = String(req.body?.number || '').replace(/\D/g, '')
+      const accepted = req.body?.accepted === true || String(req.body?.accepted || '').trim() === 'true'
+      if (!accepted) {
+        return res.status(400).json({ ok: false, error: 'يجب الموافقة على استخدام رقم ثانوي قبل إصدار الكود.' })
+      }
+      const result = await issueWebsitePairingCode(number)
+      res.json({
+        ok: true,
+        number: result.number,
+        code: result.code,
+        panelUrl: result.panelUrl,
+        message: 'تم تجهيز كود الاقتران بنجاح.'
+      })
+    } catch (e) {
+      const message = String(e.message || '')
+      const mapped =
+        message === 'invalid_number'
+          ? 'صيغة الرقم غير صحيحة. استخدم الرقم الدولي بدون + أو مسافات.'
+          : message === 'linked_other'
+            ? 'هذا الرقم مربوط مسبقاً داخل هذا المشروع ولا يمكن ربطه من صفحة عامة.'
+            : message === 'already_connected'
+              ? 'هذا الرقم مربوط ومتصّل بالفعل. افتح بوابة الرقم لإدارته.'
+              : 'تعذر إصدار كود الاقتران حالياً. حاول مرة أخرى بعد قليل.'
+      const status = ['invalid_number'].includes(message) ? 400 : ['linked_other', 'already_connected'].includes(message) ? 409 : 500
+      res.status(status).json({ ok: false, error: mapped })
+    }
   })
 
   app.post('/api/public/ai-chat', async (req, res) => {
