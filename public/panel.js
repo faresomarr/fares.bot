@@ -8,7 +8,16 @@
     reactions: null,
     fieldMeta: {},
     refreshTimer: null,
+    themeIndex: 0,
   }
+
+  // واجهة لوحة الرقم تتبدل ألوانها كل ثانية بشكل هادئ ومنظم.
+  const PANEL_PALETTES = [
+    { primary: '#22d3ee', secondary: '#818cf8', tertiary: '#f472b6', accent: '#f59e0b', glow: 'rgba(34, 211, 238, 0.45)', panelPrimary: '#22d3ee', panelSecondary: '#818cf8', panelGlow: 'rgba(34, 211, 238, 0.45)' },
+    { primary: '#f43f5e', secondary: '#8b5cf6', tertiary: '#22d3ee', accent: '#facc15', glow: 'rgba(244, 63, 94, 0.42)', panelPrimary: '#f43f5e', panelSecondary: '#8b5cf6', panelGlow: 'rgba(244, 63, 94, 0.42)' },
+    { primary: '#14b8a6', secondary: '#3b82f6', tertiary: '#a855f7', accent: '#fb7185', glow: 'rgba(20, 184, 166, 0.42)', panelPrimary: '#14b8a6', panelSecondary: '#3b82f6', panelGlow: 'rgba(20, 184, 166, 0.42)' },
+    { primary: '#f59e0b', secondary: '#ef4444', tertiary: '#6366f1', accent: '#22c55e', glow: 'rgba(245, 158, 11, 0.42)', panelPrimary: '#f59e0b', panelSecondary: '#ef4444', panelGlow: 'rgba(245, 158, 11, 0.42)' },
+  ]
 
   function qs(id) { return document.getElementById(id) }
 
@@ -30,6 +39,27 @@
   function safeSet(id, text) {
     const el = qs(id)
     if (el) el.textContent = text
+  }
+
+  function applyPanelPalette() {
+    const root = document.documentElement
+    const palette = PANEL_PALETTES[STATE.themeIndex % PANEL_PALETTES.length]
+    root.style.setProperty('--c-primary', palette.primary)
+    root.style.setProperty('--c-primary-2', palette.secondary)
+    root.style.setProperty('--c-primary-3', palette.tertiary)
+    root.style.setProperty('--c-accent', palette.accent)
+    root.style.setProperty('--c-glow', palette.glow)
+    root.style.setProperty('--panel-p', palette.panelPrimary)
+    root.style.setProperty('--panel-p2', palette.panelSecondary)
+    root.style.setProperty('--panel-glow', palette.panelGlow)
+  }
+
+  function startPanelThemeCycle() {
+    applyPanelPalette()
+    setInterval(() => {
+      STATE.themeIndex = (STATE.themeIndex + 1) % PANEL_PALETTES.length
+      applyPanelPalette()
+    }, 1000)
   }
 
   function startWithNumber() {
@@ -463,9 +493,10 @@
         const box = qs('panelPairCodeBox'); if (box) box.classList.add('hidden')
         return
       }
-      safeSet('panelPairCode', data.code || '—')
+      const rawCode = String((data && data.rawCode) || '').replace(/[^A-Za-z0-9]/g, '')
+      safeSet('panelPairCode', data.code || rawCode || '—')
       const box = qs('panelPairCodeBox'); if (box) box.classList.remove('hidden')
-      setStatus(status, '✅ تم إصدار الكود بنجاح.', 'success')
+      setStatus(status, '✅ تم إصدار الكود بنجاح. أدخله في واتساب بدون شرطات أو مسافات إضافية.', 'success')
     } catch (e) {
       setStatus(status, e.message || 'فشل إصدار الكود.', 'error')
     }
@@ -548,6 +579,7 @@
   }
 
   async function init() {
+    startPanelThemeCycle()
     loadDefaults()
 
     const form = qs('panelLoginForm')
