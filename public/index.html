@@ -3,158 +3,313 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Fares Bot | The Mini Bot</title>
+    <title>Fares Bot | موقع البوت</title>
     <meta
       name="description"
-      content="واجهة The Mini Bot مرتبطة بالكامل بمشروع Fares Bot، وكل قسم فيها يفتح في صفحة مستقلة وواضحة مع أزرار مباشرة للربط والإعدادات والتواصل."
+      content="واجهة عربية متكاملة لربط واتساب، استخراج كود الاقتران، متابعة الإحصائيات، التعليقات، وحالة قاعدة البيانات والجلسات في مشروع Fares Bot."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/mini.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&family=Tajawal:wght@400;500;700;800;900&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/styles.css" />
   </head>
-  <body class="mini-body">
-    <div class="mini-bg">
-      <div class="mini-blob blob-1"></div>
-      <div class="mini-blob blob-2"></div>
-      <div class="mini-blob blob-3"></div>
-      <div class="mini-grid"></div>
+  <body>
+    <div class="aurora-bg">
+      <div class="aurora aurora-1"></div>
+      <div class="aurora aurora-2"></div>
+      <div class="aurora aurora-3"></div>
+      <div class="aurora aurora-4"></div>
     </div>
+    <div class="bg-grid"></div>
+    <div class="bg-dots"></div>
+    <div class="bg-orb orb-1"></div>
+    <div class="bg-orb orb-2"></div>
 
-    <header class="mini-header shell">
-      <a class="mini-brand" href="/bot" aria-label="Fares Bot Mini">
-        <span class="mini-brand-logo">♛</span>
-        <span class="mini-brand-text">
-          <strong>FARES BOT</strong>
-          <small>The Mini Bot</small>
-        </span>
-      </a>
+    <section class="shell welcome-marquee-shell">
+      <div class="welcome-marquee">
+        <div class="welcome-track">
+          <span>أهلاً وسهلاً ✦ نورت موقع فارس ✦ أهلاً وسهلاً ✦ نورت موقع فارس ✦ أهلاً وسهلاً ✦ نورت موقع فارس</span>
+          <span>أهلاً وسهلاً ✦ نورت موقع فارس ✦ أهلاً وسهلاً ✦ نورت موقع فارس ✦ أهلاً وسهلاً ✦ نورت موقع فارس</span>
+        </div>
+      </div>
+    </section>
 
-      <nav class="mini-nav" aria-label="التنقل">
-        <a href="/bot" data-nav="home">الرئيسية</a>
-        <a href="/bot/deploy" data-nav="deploy">نشر الآن</a>
-        <a href="/bot/settings" data-nav="settings">الإعدادات</a>
-        <a href="/bot/autosave" data-nav="autosave">حفظ تلقائي</a>
-        <a href="/bot/autoreply" data-nav="autoreply">رد تلقائي</a>
-        <a href="/bot/about" data-nav="about">حول</a>
-        <a href="/bot/faq" data-nav="faq">الأسئلة</a>
-        <a href="/bot/contact" data-nav="contact">تواصل</a>
+    <header class="topbar shell">
+      <div class="brand">
+        <div class="brand-avatar-wrap">
+          <div class="brand-glow"></div>
+          <img class="brand-avatar" src="/hero-image.jpg" alt="Fares Bot" />
+        </div>
+        <div class="brand-text">
+          <strong id="siteTitle">Fares Bot</strong>
+          <p>موقع البوت — ربط واتساب — تعليقات — إحصائيات — قاعدة بيانات فعّالة</p>
+        </div>
+      </div>
+
+      <nav class="top-actions">
+        <a class="btn btn-primary" href="/bot/deploy"><span class="btn-icon">⚡</span><span>ربط رقمك الآن</span></a>
+        <a class="btn btn-soft" href="#commentsSection"><span class="btn-icon">💬</span><span>قسم التعليقات</span></a>
+        <a id="navPanel" class="btn btn-secondary" href="/panel"><span class="btn-icon">🏛️</span><span>بوابة الرقم</span></a>
+        <a id="navAI" class="btn btn-soft" href="/ai"><span class="btn-icon">✦</span><span>المساعد</span></a>
+        <a id="navChannel" class="btn btn-outline" href="#" target="_blank" rel="noreferrer"><span class="btn-icon">📡</span><span>القناة</span></a>
       </nav>
     </header>
 
-    <main class="shell mini-main">
-      <section class="hero-card mini-center-box">
-        <span class="mini-badge">واجهة مفعلة بالكامل</span>
-        <h1>كل أقسام <span>The Mini Bot</span> أصبحت صفحات مستقلة وواضحة</h1>
-        <p>
-          الآن أي شخص يفتح صفحة البوت ويضغط على أي قسم سيتم نقله مباشرة إلى صفحة خاصة بهذا القسم، مع ربط واضح
-          بصفحات المشروع الأساسية مثل ربط الرقم، بوابة الإعدادات، المساعد، والقنوات الرسمية.
-        </p>
+    <main class="shell layout layout-tight">
+      <section class="card landing-hero">
+        <div class="landing-grid">
+          <div class="landing-copy">
+            <span class="eyebrow"><span class="dot"></span>الخدمة فعّالة الآن وتعمل بالألوان المتحركة</span>
+            <h1>
+              <span class="gradient-text">أهلاً وسهلاً نورت موقع فارس</span>
+              <br />
+              منصة ربط رقمك وإدارة بوتك بشكل كامل
+            </h1>
+            <p id="siteDescription">من هنا تقدر تفتح صفحة ربط الرقم الصحيحة، تطلب كود الاقتران، تتابع الإحصائيات الكاملة، تشاهد حالة قاعدة البيانات، وتضيف تعليقك مع رد تلقائي مباشر.</p>
+            <div class="hero-actions">
+              <a class="btn btn-primary" href="/bot/deploy"><span class="btn-icon">🔗</span><span>فتح صفحة الرقم</span></a>
+              <a id="heroOwnerPortal" class="btn btn-secondary" href="/panel"><span class="btn-icon">⚙️</span><span>فتح لوحة الإعدادات</span></a>
+              <a class="btn btn-soft" href="#databaseSection"><span class="btn-icon">🗄️</span><span>معلومات قاعدة البيانات</span></a>
+            </div>
+            <div class="whatsapp-showcase">
+              <article class="wa-card wa-official">
+                <div class="wa-icon">🕒</div>
+                <div>
+                  <strong id="siteClock">00:00:00</strong>
+                  <p id="siteClockDate">جاري تحميل الوقت...</p>
+                </div>
+              </article>
+              <article class="wa-card wa-business">
+                <div class="wa-icon">✅</div>
+                <div>
+                  <strong id="serviceLiveBadge">الخدمة فعّالة</strong>
+                  <p id="serviceLiveText">الجلسات، الربط، والتفاعل على الحالات يعمل بشكل مستمر.</p>
+                </div>
+              </article>
+              <article class="wa-card wa-classic">
+                <div class="wa-icon">🗄️</div>
+                <div>
+                  <strong id="databaseEngine">قاعدة البيانات: جار التحميل</strong>
+                  <p id="databaseStorageMode">وضع التخزين: جار التحميل</p>
+                </div>
+              </article>
+            </div>
+          </div>
 
-        <div class="hero-actions">
-          <a class="mini-btn mini-btn-primary" href="/bot/deploy">ربط رقم الآن</a>
-          <a class="mini-btn mini-btn-secondary" href="/bot/settings">فتح صفحة الإعدادات</a>
-          <a class="mini-btn mini-btn-soft" href="/bot/contact">معلومات المطور</a>
-        </div>
-
-        <div class="hero-links">
-          <a href="/">صفحة الربط الرئيسية</a>
-          <a href="/panel">بوابة الرقم</a>
-          <a href="/ai">المساعد الذكي</a>
-          <a href="#" data-link="channel" target="_blank" rel="noreferrer">قناة المشروع</a>
-        </div>
-      </section>
-
-      <section class="mini-section">
-        <div class="section-heading mini-center-text">
-          <span>الأقسام المتاحة</span>
-          <h2>اختر القسم الذي تريد فتحه</h2>
-          <p>كل بطاقة تنقلك إلى صفحة منفصلة فيها شرح هذا القسم وروابطه المرتبطة بالمشروع.</p>
-        </div>
-
-        <div class="mini-card-grid">
-          <a class="mini-feature-card" href="/bot/deploy">
-            <div class="feature-icon">🔗</div>
-            <h3>نشر الآن</h3>
-            <p>صفحة خاصة بربط الرقم وشرح طريقة إصدار كود الاقتران والدخول إلى صفحة الربط الأساسية.</p>
-            <span>افتح صفحة الربط</span>
-          </a>
-
-          <a class="mini-feature-card" href="/bot/settings">
-            <div class="feature-icon">⚙️</div>
-            <h3>الإعدادات</h3>
-            <p>صفحة مستقلة لإعدادات الرقم المربوط مع وصول مباشر إلى بوابة الرقم وإدارة الإعدادات.</p>
-            <span>افتح صفحة الإعدادات</span>
-          </a>
-
-          <a class="mini-feature-card" href="/bot/autosave">
-            <div class="feature-icon">💾</div>
-            <h3>حفظ تلقائي</h3>
-            <p>صفحة توضح ميزة الحفظ التلقائي وكيفية متابعة إعداداتها من داخل المشروع.</p>
-            <span>افتح صفحة الحفظ</span>
-          </a>
-
-          <a class="mini-feature-card" href="/bot/autoreply">
-            <div class="feature-icon">🤖</div>
-            <h3>رد تلقائي</h3>
-            <p>صفحة مستقلة تشرح الردود التلقائية وطريقة الوصول إلى الإعدادات المتعلقة بها.</p>
-            <span>افتح صفحة الردود</span>
-          </a>
-
-          <a class="mini-feature-card" href="/bot/about">
-            <div class="feature-icon">ℹ️</div>
-            <h3>حول</h3>
-            <p>صفحة تعريفية بالموقع وربطه مع مشروع Fares Bot وبواباته الأساسية.</p>
-            <span>افتح صفحة حول</span>
-          </a>
-
-          <a class="mini-feature-card" href="/bot/faq">
-            <div class="feature-icon">❓</div>
-            <h3>الأسئلة</h3>
-            <p>صفحة منظمة للأسئلة الشائعة حول الربط، الإعدادات، واستخدام صفحات المشروع.</p>
-            <span>افتح صفحة الأسئلة</span>
-          </a>
-
-          <a class="mini-feature-card mini-feature-card-accent" href="/bot/contact">
-            <div class="feature-icon">📞</div>
-            <h3>تواصل</h3>
-            <p>صفحة خاصة بمعلومات المطور وروابط التواصل المباشر والقناة الرسمية الخاصة بالمشروع.</p>
-            <span>افتح صفحة التواصل</span>
-          </a>
+          <aside class="pairing-showcase" id="pairingSection">
+            <div class="pairing-badge">LIVE · PAIR · AUTO COPY</div>
+            <h2>ربط الرقم من داخل الموقع مباشرة</h2>
+            <p>أدخل الرقم الدولي واضغط طلب الكود. إذا تم إنشاء كود الاقتران فسيظهر لك بشكل صحيح ويتم نسخ الكود الخام تلقائياً مباشرة.</p>
+            <form id="publicPairForm" class="public-pair-form" autocomplete="off">
+              <label class="full">
+                <span>رقم واتساب</span>
+                <input id="publicPairNumber" name="number" type="text" inputmode="numeric" placeholder="مثال: 96777XXXXXXX" required />
+              </label>
+              <label class="pair-terms full">
+                <input id="publicPairAccepted" name="accepted" type="checkbox" />
+                <span>أؤكد أن الرقم ثانوي ومخصص للربط فقط</span>
+              </label>
+              <div class="form-actions full">
+                <button class="btn btn-primary" type="submit"><span class="btn-icon">🔗</span><span>طلب كود الاقتران</span></button>
+                <p id="publicPairStatus" class="form-status"></p>
+              </div>
+            </form>
+            <div id="publicPairResult" class="pair-result hidden">
+              <div class="pair-code-line">
+                <span>كود الاقتران</span>
+                <code id="publicPairCode">—</code>
+              </div>
+              <div class="pair-copy-row">
+                <button id="copyPairCodeBtn" class="btn btn-soft" type="button">📋 نسخ الكود الخام</button>
+                <p id="pairCodeHint" class="hint-line">سيتم نسخ الكود الخام تلقائياً بعد إنشائه.</p>
+              </div>
+              <ol class="pair-steps">
+                <li>افتح واتساب على نفس الرقم</li>
+                <li>الأجهزة المرتبطة ← ربط جهاز</li>
+                <li>اختر الاقتران برقم بدلاً من QR</li>
+                <li>الصق الكود المنسوخ مباشرة خلال المهلة</li>
+              </ol>
+              <a id="publicPairPanelLink" class="btn btn-soft" href="/panel">فتح لوحة هذا الرقم</a>
+            </div>
+          </aside>
         </div>
       </section>
 
-      <section class="mini-section">
-        <div class="mini-info-grid">
-          <article class="mini-info-box">
-            <strong>ربط كامل بالمشروع</strong>
-            <p>تم تجهيز الأزرار والصفحات بحيث تنقلك مباشرة إلى صفحات المشروع الحقيقية بدون عناصر معطلة أو روابط فارغة.</p>
+      <section class="section-shell">
+        <div class="section-head main-head">
+          <div>
+            <span class="eyebrow"><span class="dot"></span>الإحصائيات الكاملة</span>
+            <h2>كل أرقام وإحصائيات البوت أمامك مباشرة</h2>
+          </div>
+          <small id="lastUpdated" class="head-sub">آخر تحديث: —</small>
+        </div>
+        <div class="stats-grid bot-stats-grid">
+          <article class="stat-card cta-cyan"><span>المستخدمون</span><strong id="totalUsers">0</strong></article>
+          <article class="stat-card cta-green"><span>الأرقام المربوطة</span><strong id="totalNumbers">0</strong></article>
+          <article class="stat-card cta-purple"><span>الجلسات المتصلة</span><strong id="connectedNumbers">0</strong></article>
+          <article class="stat-card cta-gold"><span>قيد الاقتران</span><strong id="pairingNumbers">0</strong></article>
+          <article class="stat-card cta-orange"><span>قيد الاتصال</span><strong id="connectingNumbers">0</strong></article>
+          <article class="stat-card cta-red"><span>مسجل خروجها</span><strong id="loggedOutNumbers">0</strong></article>
+          <article class="stat-card cta-blue"><span>المنضمّة للقناة</span><strong id="channelJoinedNumbers">0</strong></article>
+          <article class="stat-card cta-pink"><span>تفاعلات الحالات</span><strong id="totalStatusReactions">0</strong></article>
+          <article class="stat-card cta-cyan"><span>أكواد الاقتران</span><strong id="totalPairingCodesIssued">0</strong></article>
+          <article class="stat-card cta-green"><span>الربط الناجح</span><strong id="totalSuccessfulLinks">0</strong></article>
+          <article class="stat-card cta-purple"><span>إعادة الاتصال</span><strong id="totalReconnects">0</strong></article>
+          <article class="stat-card cta-gold"><span>مشاهدات الحالات</span><strong id="totalStatusViews">0</strong></article>
+          <article class="stat-card cta-orange"><span>رسائل واتساب الذاتية</span><strong id="totalSelfMessages">0</strong></article>
+          <article class="stat-card cta-red"><span>محاولات الانضمام للقناة</span><strong id="totalChannelJoinAttempts">0</strong></article>
+          <article class="stat-card cta-blue"><span>نجاحات الانضمام للقناة</span><strong id="totalChannelJoinSuccess">0</strong></article>
+          <article class="stat-card cta-pink"><span>الجلسات النشطة الآن</span><strong id="activeSessions">0</strong></article>
+          <article class="stat-card cta-cyan"><span>إجمالي التعليقات</span><strong id="totalComments">0</strong></article>
+          <article class="stat-card cta-green"><span>تعليقات مردود عليها</span><strong id="repliedComments">0</strong></article>
+          <article class="stat-card cta-orange"><span>تعليقات بانتظار الرد</span><strong id="pendingReplies">0</strong></article>
+        </div>
+      </section>
+
+      <section class="section-shell">
+        <div class="section-head main-head">
+          <div>
+            <span class="eyebrow"><span class="dot"></span>أقسام موقع البوت</span>
+            <h2>الأقسام الآن مرتبة بشكل عمودي وواضح</h2>
+          </div>
+          <small class="head-sub">كل قسم في بطاقة عمودية مستقلة</small>
+        </div>
+        <div class="vertical-cards bot-vertical-single">
+          <article class="vcard">
+            <div class="vcard-number">01</div>
+            <div class="vcard-icon-wrap"><span class="vcard-icon">🔗</span></div>
+            <div class="vcard-body">
+              <span class="vcard-eyebrow">ربط الرقم</span>
+              <h3>صفحة ربط الرقم الصحيحة</h3>
+              <p>تم تصحيح المسار حتى لما تضغط «فتح صفحة الرقم» يفتح لك صفحة ربط الرقم الفعلية بدل ما يرجعك للصفحة الرئيسية.</p>
+              <a class="feature-link feature-link-accent" href="/bot/deploy"><span class="link-bullet"></span><div><span>الدخول المباشر</span><strong>فتح صفحة الرقم وطلب الكود الآن</strong></div></a>
+            </div>
           </article>
-          <article class="mini-info-box">
-            <strong>واجهة مرتبة ووسط الصفحة</strong>
-            <p>تم ضبط توزيع العناصر والنصوص لتكون في وسط الصفحة وبشكل أوضح على الجوال والكمبيوتر.</p>
+
+          <article class="vcard">
+            <div class="vcard-number">02</div>
+            <div class="vcard-icon-wrap"><span class="vcard-icon">💬</span></div>
+            <div class="vcard-body">
+              <span class="vcard-eyebrow">التعليقات</span>
+              <h3>قسم تعليقات داخل الموقع</h3>
+              <p>تمت إضافة قسم تعليقات واضح داخل الموقع، وعند إرسال أي تعليق يتم إدراج رد تلقائي أولي عليه مباشرة.</p>
+              <a class="feature-link" href="#commentsSection"><span class="link-bullet"></span><div><span>الانتقال السريع</span><strong>اذهب مباشرة إلى قسم التعليقات</strong></div></a>
+            </div>
           </article>
-          <article class="mini-info-box">
-            <strong>كل قسم له صفحة ثانية</strong>
-            <p>بدلاً من مجرد إظهار جزء داخل نفس الصفحة، أصبح لكل قسم صفحة مستقلة مخصصة له.</p>
+
+          <article class="vcard">
+            <div class="vcard-number">03</div>
+            <div class="vcard-icon-wrap"><span class="vcard-icon">⚙️</span></div>
+            <div class="vcard-body">
+              <span class="vcard-eyebrow">الإدارة</span>
+              <h3>لوحة الرقم والإعدادات</h3>
+              <p>من لوحة الرقم تقدر تدخل على الإعدادات، المحفظة، سجل التفاعلات، الأمان، وربط أرقام إضافية من نفس المكان.</p>
+              <a class="feature-link" href="/panel"><span class="link-bullet"></span><div><span>لوحة الإدارة</span><strong>فتح بوابة الرقم</strong></div></a>
+            </div>
           </article>
+
+          <article class="vcard">
+            <div class="vcard-number">04</div>
+            <div class="vcard-icon-wrap"><span class="vcard-icon">🗄️</span></div>
+            <div class="vcard-body">
+              <span class="vcard-eyebrow">الجلسات وقاعدة البيانات</span>
+              <h3>استمرارية العمل والتفاعل على الحالات</h3>
+              <p>الموقع يعرض لك أن الجلسات والبيانات مخزنة بشكل دائم، مع إعادة اتصال تلقائية ومتابعة للحالات حتى تبقى الأرقام المربوطة شغّالة بشكل مستمر.</p>
+              <a class="feature-link" href="#databaseSection"><span class="link-bullet"></span><div><span>المزيد من المعلومات</span><strong>افتح قسم قاعدة البيانات والاستمرارية</strong></div></a>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="section-shell" id="databaseSection">
+        <div class="feature-showcase">
+          <article class="card feature-spotlight">
+            <span class="eyebrow">معلومات قاعدة البيانات</span>
+            <h2>قاعدة البيانات والجلسات مفعلة تلقائياً</h2>
+            <p>هذا القسم يوضح حالة قاعدة البيانات، طريقة حفظ الجلسات، تفعيل الفهارس تلقائياً، واستمرار الأرقام المربوطة في العمل والتفاعل على حالات واتساب.</p>
+            <div class="mini-note-box">
+              <strong id="databaseActivation">التنشيط التلقائي: جار التحميل</strong>
+              <p id="databaseFeatures">استعادة الجلسات، إعادة الاتصال، وتخزين البيانات الدائم يتم تفعيله تلقائياً داخل المشروع.</p>
+            </div>
+            <ul class="feature-list">
+              <li><span class="list-dot"></span><span id="runtimeStartedAt">بداية التشغيل: —</span></li>
+              <li><span class="list-dot"></span><span id="runtimeUptime">مدة التشغيل: —</span></li>
+              <li><span class="list-dot"></span><span id="runtimeSiteUrl">رابط الموقع: —</span></li>
+              <li><span class="list-dot"></span><span id="databaseAutoIndexes">الفهارس التلقائية: مفعلة</span></li>
+            </ul>
+          </article>
+
+          <article class="card feature-list-card">
+            <span class="eyebrow">مؤشرات الصحة</span>
+            <h2>نِسَب الاستقرار والتفاعل</h2>
+            <div class="progress-wrap">
+              <div class="progress-card">
+                <div class="label-row"><span>نسبة الاتصال</span><strong id="connectedRateValue">0%</strong></div>
+                <div class="progress-bar"><i id="connectedRateBar"></i></div>
+              </div>
+              <div class="progress-card">
+                <div class="label-row"><span>نسبة الانضمام للقناة</span><strong id="channelJoinRateValue">0%</strong></div>
+                <div class="progress-bar"><i id="channelJoinRateBar" class="bar-success"></i></div>
+              </div>
+              <div class="progress-card">
+                <div class="label-row"><span>نسبة الرد على التعليقات</span><strong id="repliedRateValue">0%</strong></div>
+                <div class="progress-bar"><i id="repliedRateBar"></i></div>
+              </div>
+            </div>
+            <div class="stats-grid bot-mini-stats-grid">
+              <article class="stat-card cta-green"><span>التعليقات المعلقة</span><strong id="healthPendingComments">0</strong></article>
+              <article class="stat-card cta-purple"><span>الردود الجماعية تيليجرام</span><strong id="totalBroadcastsTelegram">0</strong></article>
+              <article class="stat-card cta-cyan"><span>الردود الجماعية واتساب</span><strong id="totalBroadcastsWhatsapp">0</strong></article>
+              <article class="stat-card cta-gold"><span>مستلمي البث</span><strong id="totalBroadcastRecipients">0</strong></article>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="section-shell" id="commentsSection">
+        <div class="section-head main-head">
+          <div>
+            <span class="eyebrow"><span class="dot"></span>قسم التعليقات</span>
+            <h2>اكتب تعليقك وسيظهر الرد الأولي تلقائياً</h2>
+          </div>
+          <small class="head-sub">يمكنك الوصول لهذا القسم من الزر العلوي مباشرة</small>
+        </div>
+        <div class="comments-layout">
+          <section class="card">
+            <form id="commentForm" class="comment-form">
+              <label>
+                <span>الاسم</span>
+                <input type="text" name="name" placeholder="اسمك" required />
+              </label>
+              <label>
+                <span>وسيلة التواصل</span>
+                <input type="text" name="contact" placeholder="واتساب أو تيليجرام" />
+              </label>
+              <label class="full">
+                <span>التعليق</span>
+                <textarea name="message" placeholder="اكتب تعليقك أو طلبك هنا" required></textarea>
+              </label>
+              <div class="form-actions full">
+                <button class="btn btn-primary" type="submit">إرسال التعليق</button>
+                <p id="formStatus" class="form-status"></p>
+              </div>
+            </form>
+          </section>
+          <section class="card">
+            <div id="commentsFeed" class="comments-feed empty-state">جاري تحميل التعليقات...</div>
+          </section>
         </div>
       </section>
     </main>
 
-    <footer class="mini-footer shell">
-      <div>
-        <strong>Fares Bot</strong>
-        <p>جميع الحقوق محفوظة للمشروع الأصلي — Fares Bot</p>
-      </div>
-      <div class="mini-footer-links">
-        <a href="/">الصفحة الرئيسية</a>
-        <a href="/panel">بوابة الرقم</a>
-        <a href="/bot/contact">تواصل</a>
-        <a href="#" data-link="developer" target="_blank" rel="noreferrer">واتساب المطور</a>
-      </div>
+    <footer class="shell site-footer">
+      <p>
+        جميع الحقوق محفوظة للمشروع الأصلي — <strong id="rightsTitle">Fares Bot</strong>
+        · <a id="rightsChannel" href="#" target="_blank" rel="noreferrer">قناة التحديثات</a>
+        · <a id="rightsDeveloper" href="#" target="_blank" rel="noreferrer">واتساب المطور</a>
+      </p>
     </footer>
 
-    <script src="/mini.js"></script>
+    <script src="/app.js"></script>
   </body>
 </html>

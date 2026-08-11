@@ -496,7 +496,14 @@
       const rawCode = String((data && data.rawCode) || '').replace(/[^A-Za-z0-9]/g, '')
       safeSet('panelPairCode', data.code || rawCode || '—')
       const box = qs('panelPairCodeBox'); if (box) box.classList.remove('hidden')
-      setStatus(status, '✅ تم إصدار الكود بنجاح. أدخله في واتساب بدون شرطات أو مسافات إضافية.', 'success')
+      let copied = false
+      try {
+        await navigator.clipboard.writeText(rawCode)
+        copied = true
+      } catch {}
+      setStatus(status, copied
+        ? '✅ تم إصدار الكود ونسخه تلقائياً. ألصقه الآن في واتساب بدون شرطات أو مسافات إضافية.'
+        : '✅ تم إصدار الكود بنجاح. أدخله في واتساب بدون شرطات أو مسافات إضافية.', 'success')
     } catch (e) {
       setStatus(status, e.message || 'فشل إصدار الكود.', 'error')
     }

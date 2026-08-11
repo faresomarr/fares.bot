@@ -3,66 +3,111 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>نشر الآن | Fares Bot</title>
+    <title>صفحة ربط الرقم | Fares Bot</title>
+    <meta name="description" content="صفحة ربط الرقم الصحيحة في Fares Bot. اطلب كود الاقتران وسيتم نسخه تلقائياً عند إنشائه." />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/mini.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&family=Tajawal:wght@400;500;700;800;900&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <div class="mini-bg"><div class="mini-blob blob-1"></div><div class="mini-blob blob-2"></div><div class="mini-blob blob-3"></div><div class="mini-grid"></div></div>
-    <header class="mini-header shell">
-      <a class="mini-brand" href="/bot"><span class="mini-brand-logo">♛</span><span class="mini-brand-text"><strong data-site-title>Fares Bot</strong><small>The Mini Bot</small></span></a>
-      <nav class="mini-nav">
-        <a href="/bot" data-nav="home">الرئيسية</a>
-        <a href="/bot/deploy" data-nav="deploy">نشر الآن</a>
-        <a href="/bot/settings" data-nav="settings">الإعدادات</a>
-        <a href="/bot/autosave" data-nav="autosave">حفظ تلقائي</a>
-        <a href="/bot/autoreply" data-nav="autoreply">رد تلقائي</a>
-        <a href="/bot/about" data-nav="about">حول</a>
-        <a href="/bot/faq" data-nav="faq">الأسئلة</a>
-        <a href="/bot/contact" data-nav="contact">تواصل</a>
+    <div class="aurora-bg">
+      <div class="aurora aurora-1"></div>
+      <div class="aurora aurora-2"></div>
+      <div class="aurora aurora-3"></div>
+      <div class="aurora aurora-4"></div>
+    </div>
+    <div class="bg-grid"></div>
+    <div class="bg-dots"></div>
+
+    <section class="shell welcome-marquee-shell">
+      <div class="welcome-marquee">
+        <div class="welcome-track">
+          <span>صفحة ربط الرقم ✦ كود صحيح ✦ نسخ تلقائي ✦ صفحة ربط الرقم ✦ كود صحيح ✦ نسخ تلقائي</span>
+          <span>صفحة ربط الرقم ✦ كود صحيح ✦ نسخ تلقائي ✦ صفحة ربط الرقم ✦ كود صحيح ✦ نسخ تلقائي</span>
+        </div>
+      </div>
+    </section>
+
+    <header class="topbar shell">
+      <div class="brand">
+        <div class="brand-avatar-wrap">
+          <div class="brand-glow"></div>
+          <img class="brand-avatar" src="/hero-image.jpg" alt="Fares Bot" />
+        </div>
+        <div class="brand-text">
+          <strong data-site-title>Fares Bot</strong>
+          <p>هذه هي صفحة ربط الرقم الفعلية — ولن تعيدك للرئيسية.</p>
+        </div>
+      </div>
+      <nav class="top-actions">
+        <a class="btn btn-soft" href="/bot"><span class="btn-icon">🏠</span><span>العودة لموقع البوت</span></a>
+        <a id="navPanel" class="btn btn-secondary" href="/panel"><span class="btn-icon">🏛️</span><span>بوابة الرقم</span></a>
       </nav>
     </header>
 
-    <main class="shell mini-page-shell">
-      <section class="mini-page-card">
-        <span class="mini-page-eyebrow">صفحة قسم نشر الآن</span>
-        <h1>ابدأ <span>ربط الرقم</span> من هنا</h1>
-        <p>
-          هذه الصفحة مخصصة للقسم الذي يضغط عليه المستخدم عند اختيار «نشر الآن». تم ربطها مباشرة بصفحة الربط
-          الأساسية في المشروع حتى ينتقل الزائر فوراً إلى المكان الصحيح لإدخال الرقم وإصدار كود الاقتران.
-        </p>
-        <div class="mini-page-actions">
-          <a class="mini-btn mini-btn-primary" href="/#pairingSection">فتح صفحة ربط الرقم</a>
-          <a class="mini-btn mini-btn-secondary" href="/panel">فتح بوابة الرقم</a>
-          <a class="mini-btn mini-btn-soft" href="/bot/contact">التواصل مع المطور</a>
-        </div>
-      </section>
+    <main class="shell layout layout-tight">
+      <section class="card landing-hero">
+        <div class="landing-grid deploy-only-grid">
+          <div class="landing-copy">
+            <span class="eyebrow"><span class="dot"></span>صفحة ربط الرقم</span>
+            <h1><span class="gradient-text">اطلب كود الاقتران</span> من نفس الصفحة</h1>
+            <p>تم إصلاح المشكلة: الآن لما تضغط «فتح صفحة الرقم» ستبقى داخل صفحة الربط الصحيحة، تدخل الرقم، تضغط طلب كود، ويظهر لك الكود الصحيح ويتم نسخه تلقائياً مباشرة.</p>
+            <div class="whatsapp-showcase">
+              <article class="wa-card wa-official"><div class="wa-icon">🕒</div><div><strong id="siteClock">00:00:00</strong><p id="siteClockDate">جاري تحميل الوقت...</p></div></article>
+              <article class="wa-card wa-business"><div class="wa-icon">✅</div><div><strong id="serviceLiveBadge">الخدمة فعّالة</strong><p>استخراج الكود والنسخ التلقائي جاهز.</p></div></article>
+              <article class="wa-card wa-classic"><div class="wa-icon">📊</div><div><strong id="totalPairingCodesIssued">0</strong><p>إجمالي أكواد الاقتران الصادرة</p></div></article>
+            </div>
+          </div>
 
-      <section class="mini-page-grid">
-        <article class="mini-content-card">
-          <h3>ماذا يفعل هذا القسم</h3>
-          <ul class="mini-list">
-            <li>ينقلك مباشرة إلى صفحة الربط الأساسية داخل المشروع.</li>
-            <li>يشرح للمستخدم أن الخطوة التالية هي إدخال الرقم الدولي.</li>
-            <li>يوفر وصولاً سريعاً إلى بوابة الرقم بعد إتمام الربط.</li>
-            <li>يحافظ على تجربة واضحة بدل بقاء الأزرار بدون عمل.</li>
-          </ul>
-        </article>
-        <article class="mini-content-card">
-          <h3>الخطوات السريعة</h3>
-          <ul class="mini-list">
-            <li>افتح صفحة الربط الرئيسية.</li>
-            <li>أدخل الرقم بصيغته الدولية.</li>
-            <li>أنشئ كود الاقتران من الصفحة الأساسية.</li>
-            <li>بعد الربط افتح بوابة الرقم لإدارة إعداداته.</li>
-          </ul>
-        </article>
+          <aside class="pairing-showcase" id="pairingSection">
+            <div class="pairing-badge">PAIR PAGE · AUTO COPY</div>
+            <h2>صفحة الرقم</h2>
+            <p>أدخل الرقم الدولي، فعّل التأكيد، ثم اضغط طلب كود الاقتران.</p>
+            <form id="publicPairForm" class="public-pair-form" autocomplete="off">
+              <label class="full">
+                <span>رقم واتساب</span>
+                <input id="publicPairNumber" name="number" type="text" inputmode="numeric" placeholder="مثال: 96777XXXXXXX" required />
+              </label>
+              <label class="pair-terms full">
+                <input id="publicPairAccepted" name="accepted" type="checkbox" />
+                <span>أؤكد أن الرقم ثانوي ومخصص للربط فقط</span>
+              </label>
+              <div class="form-actions full">
+                <button class="btn btn-primary" type="submit"><span class="btn-icon">🔗</span><span>طلب كود الاقتران</span></button>
+                <p id="publicPairStatus" class="form-status"></p>
+              </div>
+            </form>
+            <div id="publicPairResult" class="pair-result hidden">
+              <div class="pair-code-line">
+                <span>كود الاقتران</span>
+                <code id="publicPairCode">—</code>
+              </div>
+              <div class="pair-copy-row">
+                <button id="copyPairCodeBtn" class="btn btn-soft" type="button">📋 نسخ الكود الخام</button>
+                <p id="pairCodeHint" class="hint-line">عند نجاح الإنشاء سيتم نسخ الكود الخام تلقائياً.</p>
+              </div>
+              <ol class="pair-steps">
+                <li>افتح واتساب ثم الأجهزة المرتبطة</li>
+                <li>اختر ربط جهاز عبر رقم</li>
+                <li>الصق الكود المنسوخ تلقائياً</li>
+                <li>بعد الربط افتح لوحة الرقم لإدارة الإعدادات</li>
+              </ol>
+              <a id="publicPairPanelLink" class="btn btn-soft" href="/panel">فتح لوحة هذا الرقم</a>
+            </div>
+          </aside>
+        </div>
       </section>
     </main>
 
-    <footer class="mini-footer shell"><div><strong>Fares Bot</strong><p>جميع الحقوق محفوظة للمشروع الأصلي — Fares Bot</p></div><div class="mini-footer-links"><a href="/bot">الرئيسية</a><a href="/panel">بوابة الرقم</a><a href="/bot/contact">تواصل</a></div></footer>
-    <script src="/mini.js"></script>
+    <footer class="shell site-footer">
+      <p>
+        جميع الحقوق محفوظة للمشروع الأصلي — <strong id="rightsTitle">Fares Bot</strong>
+        · <a id="rightsChannel" href="#" target="_blank" rel="noreferrer">قناة التحديثات</a>
+        · <a id="rightsDeveloper" href="#" target="_blank" rel="noreferrer">واتساب المطور</a>
+      </p>
+    </footer>
+
+    <script src="/app.js"></script>
   </body>
 </html>

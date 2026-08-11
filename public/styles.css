@@ -958,3 +958,31 @@ img { max-width: 100%; display: block; }
   .pair-copy-row .btn { width: 100%; justify-content: center; }
   .panel-anchor-rail { position: static; }
 }
+
+
+/* ===== bot vertical refresh 2026 ===== */
+.bot-vertical-single {
+  grid-template-columns: 1fr;
+  max-width: 1040px;
+  margin: 0 auto;
+}
+.bot-stats-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.bot-mini-stats-grid {
+  margin-top: 18px;
+}
+.deploy-only-grid {
+  grid-template-columns: minmax(0, 0.9fr) minmax(360px, 0.9fr);
+}
+.comment-form input,
+.comment-form textarea,
+.public-pair-form input {
+  color: #fff;
+}
+@media (max-width: 1100px) {
+  .bot-stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 700px) {
+  .bot-stats-grid, .bot-mini-stats-grid, .deploy-only-grid { grid-template-columns: 1fr; }
+}

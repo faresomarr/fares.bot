@@ -1,6 +1,5 @@
 const state = { config: null, stats: null, rawPairCode: '', pairCountdownTimer: null, themeIndex: 0 };
 
-// لوحات ألوان متحركة لإضفاء واجهة فخمة تتبدل كل ثانية.
 const THEME_PALETTES = [
   { primary: '#25d366', secondary: '#0ea5e9', tertiary: '#8b5cf6', accent: '#f59e0b', glow: 'rgba(37, 211, 102, 0.42)', glow2: 'rgba(14, 165, 233, 0.30)' },
   { primary: '#f43f5e', secondary: '#8b5cf6', tertiary: '#22d3ee', accent: '#facc15', glow: 'rgba(244, 63, 94, 0.42)', glow2: 'rgba(139, 92, 246, 0.30)' },
@@ -12,6 +11,7 @@ const THEME_PALETTES = [
 function qs(id) { return document.getElementById(id); }
 function setText(id, value) { const el = qs(id); if (el) el.textContent = value; }
 function setHref(id, value) { const el = qs(id); if (el && value) el.href = value; }
+function setHtml(id, value) { const el = qs(id); if (el) el.innerHTML = value; }
 
 function formatNumber(value) {
   return new Intl.NumberFormat('ar').format(Number(value || 0));
@@ -21,6 +21,18 @@ function formatDate(value) {
   if (!value) return '—';
   try { return new Date(value).toLocaleString('ar'); }
   catch { return '—'; }
+}
+
+function formatDuration(ms) {
+  const total = Math.max(0, Math.floor(Number(ms || 0) / 1000));
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  if (days > 0) return `${days} يوم ${hours} ساعة`;
+  if (hours > 0) return `${hours} ساعة ${minutes} دقيقة`;
+  if (minutes > 0) return `${minutes} دقيقة ${seconds} ثانية`;
+  return `${seconds} ثانية`;
 }
 
 function escapeHtml(text) {
@@ -51,12 +63,29 @@ function startThemeCycle() {
   }, 1000);
 }
 
+function startClock() {
+  const tick = () => {
+    const now = new Date();
+    const time = now.toLocaleTimeString('ar', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const date = now.toLocaleDateString('ar', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    setText('siteClock', time);
+    setText('siteClockDate', date);
+  };
+  tick();
+  setInterval(tick, 1000);
+}
+
+function setProgress(id, value) {
+  const el = qs(id);
+  if (el) el.style.width = `${Math.max(0, Math.min(100, Number(value || 0)))}%`;
+}
+
 function startPairCountdown(seconds) {
   const hint = qs('pairCodeHint');
   if (!hint) return;
   if (state.pairCountdownTimer) clearInterval(state.pairCountdownTimer);
   let remaining = Math.max(0, Number(seconds || 60));
-  hint.textContent = `انسخ الكود الخام وأدخله في واتساب بدون شرطات. الوقت المتبقي تقريباً: ${remaining} ثانية.`;
+  hint.textContent = `تم نسخ الكود الخام تلقائياً. الوقت المتبقي تقريباً: ${remaining} ثانية.`;
   state.pairCountdownTimer = setInterval(() => {
     remaining -= 1;
     if (remaining <= 0) {
@@ -65,17 +94,17 @@ function startPairCountdown(seconds) {
       hint.textContent = 'انتهت المهلة التقريبية للكود. إذا لم يعمل، أنشئ كوداً جديداً فوراً.';
       return;
     }
-    hint.textContent = `انسخ الكود الخام وأدخله في واتساب بدون شرطات. الوقت المتبقي تقريباً: ${remaining} ثانية.`;
+    hint.textContent = `تم نسخ الكود الخام تلقائياً. الوقت المتبقي تقريباً: ${remaining} ثانية.`;
   }, 1000);
 }
 
-async function copyPairCode() {
+async function copyPairCode(showManualFallback = true) {
   const btn = qs('copyPairCodeBtn');
   const hint = qs('pairCodeHint');
   const rawCode = String(state.rawPairCode || '').trim();
   if (!rawCode) {
     if (hint) hint.textContent = 'أنشئ كود اقتران أولاً ثم انسخه.';
-    return;
+    return false;
   }
   try {
     await navigator.clipboard.writeText(rawCode);
@@ -84,8 +113,10 @@ async function copyPairCode() {
     setTimeout(() => {
       if (btn) btn.textContent = '📋 نسخ الكود الخام';
     }, 1800);
+    return true;
   } catch {
-    if (hint) hint.textContent = `انسخ هذا الكود يدوياً بدون شرطات: ${rawCode}`;
+    if (showManualFallback && hint) hint.textContent = `انسخ هذا الكود يدوياً بدون شرطات: ${rawCode}`;
+    return false;
   }
 }
 
@@ -109,6 +140,18 @@ function renderConfig(config) {
 
   const portalHint = qs('portalLoginStatus');
   if (portalHint) portalHint.textContent = `المكافأة اليومية: ${config.dailyCoinAmount || 50} عملة لكل رقم مربوط.`;
+
+  if (config.databaseInfo) {
+    const dbName = config.databaseInfo.mongoEnabled ? 'MongoDB' : 'Local JSON';
+    setText('databaseEngine', `قاعدة البيانات: ${dbName}`);
+    setText('databaseStorageMode', `وضع التخزين: ${config.databaseInfo.sessionStorageMode || 'unknown'}`);
+    setText('databaseActivation', `التنشيط التلقائي: ${config.databaseInfo.autoReconnect ? 'مفعّل' : 'غير مفعّل'} • حفظ الجلسات ${config.databaseInfo.sessionPersistence ? 'مستمر' : 'غير مستمر'}`);
+    setText('databaseFeatures', `الفهارس التلقائية: ${config.databaseInfo.automaticIndexes ? 'مفعلة' : 'غير مفعلة'} • تفاعل الحالات: ${config.databaseInfo.statusAutomation ? 'مستمر' : 'معطّل'} • استرجاع الجلسات: ${config.databaseInfo.autoReconnect ? 'مفعّل' : 'غير مفعّل'}`);
+    setText('databaseAutoIndexes', `الفهارس التلقائية: ${config.databaseInfo.automaticIndexes ? 'مفعلة' : 'غير مفعلة'}`);
+  }
+
+  setText('serviceLiveBadge', 'الخدمة فعّالة');
+  setText('serviceLiveText', 'الجلسات، الربط، والتفاعل على الحالات يعمل بشكل مستمر.');
 }
 
 function renderStats(stats) {
@@ -116,8 +159,36 @@ function renderStats(stats) {
   setText('totalUsers', formatNumber(stats.totalUsers));
   setText('totalNumbers', formatNumber(stats.totalNumbers));
   setText('connectedNumbers', formatNumber(stats.connected));
-  setText('totalStatusReactions', formatNumber(stats.metrics.totalStatusReactions));
+  setText('pairingNumbers', formatNumber(stats.pairing));
+  setText('connectingNumbers', formatNumber(stats.connecting));
+  setText('loggedOutNumbers', formatNumber(stats.loggedOut));
+  setText('channelJoinedNumbers', formatNumber(stats.channelJoined));
+  setText('totalStatusReactions', formatNumber(stats.metrics?.totalStatusReactions));
+  setText('totalPairingCodesIssued', formatNumber(stats.metrics?.totalPairingCodesIssued));
+  setText('totalSuccessfulLinks', formatNumber(stats.metrics?.totalSuccessfulLinks));
+  setText('totalReconnects', formatNumber(stats.metrics?.totalReconnects));
+  setText('totalStatusViews', formatNumber(stats.metrics?.totalStatusViews));
+  setText('totalSelfMessages', formatNumber(stats.metrics?.totalSelfMessages));
+  setText('totalChannelJoinAttempts', formatNumber(stats.metrics?.totalChannelJoinAttempts));
+  setText('totalChannelJoinSuccess', formatNumber(stats.metrics?.totalChannelJoinSuccess));
+  setText('activeSessions', formatNumber(stats.runtime?.activeSessions));
+  setText('totalComments', formatNumber(stats.comments?.totalComments));
+  setText('repliedComments', formatNumber(stats.comments?.repliedComments));
+  setText('pendingReplies', formatNumber(stats.comments?.pendingReplies));
+  setText('healthPendingComments', formatNumber(stats.health?.pendingComments));
+  setText('totalBroadcastsTelegram', formatNumber(stats.metrics?.totalBroadcastsTelegram));
+  setText('totalBroadcastsWhatsapp', formatNumber(stats.metrics?.totalBroadcastsWhatsapp));
+  setText('totalBroadcastRecipients', formatNumber((Number(stats.metrics?.totalBroadcastRecipientsTelegram || 0) + Number(stats.metrics?.totalBroadcastRecipientsWhatsapp || 0))));
   setText('lastUpdated', `آخر تحديث: ${formatDate(stats.lastUpdatedAt)}`);
+  setText('runtimeStartedAt', `بداية التشغيل: ${formatDate(stats.runtime?.startedAt)}`);
+  setText('runtimeUptime', `مدة التشغيل: ${formatDuration(stats.runtime?.uptimeMs)}`);
+  setText('runtimeSiteUrl', `رابط الموقع: ${stats.runtime?.siteUrl || '—'}`);
+  setText('connectedRateValue', `${stats.connectedRate || 0}%`);
+  setText('channelJoinRateValue', `${stats.channelJoinRate || 0}%`);
+  setText('repliedRateValue', `${stats.health?.repliedRate || 0}%`);
+  setProgress('connectedRateBar', stats.connectedRate || 0);
+  setProgress('channelJoinRateBar', stats.channelJoinRate || 0);
+  setProgress('repliedRateBar', stats.health?.repliedRate || 0);
 }
 
 function renderComments(comments) {
@@ -176,8 +247,10 @@ async function submitComment(event) {
   const form = event.currentTarget;
   const status = qs('formStatus');
   const formData = new FormData(form);
-  status.className = 'form-status';
-  status.textContent = 'جاري الإرسال...';
+  if (status) {
+    status.className = 'form-status';
+    status.textContent = 'جاري الإرسال...';
+  }
 
   const payload = {
     name: formData.get('name'),
@@ -193,14 +266,18 @@ async function submitComment(event) {
   const data = await res.json();
 
   if (!res.ok || !data.ok) {
-    status.className = 'form-status error';
-    status.textContent = data.error || 'تعذر إرسال التعليق.';
+    if (status) {
+      status.className = 'form-status error';
+      status.textContent = data.error || 'تعذر إرسال التعليق.';
+    }
     return;
   }
 
   form.reset();
-  status.className = 'form-status success';
-  status.textContent = data.comment?.reply ? 'تم إرسال تعليقك وإضافة رد آلي أولي مباشرة.' : 'تم إرسال تعليقك بنجاح.';
+  if (status) {
+    status.className = 'form-status success';
+    status.textContent = data.comment?.reply ? 'تم إرسال تعليقك وإضافة رد آلي أولي مباشرة.' : 'تم إرسال تعليقك بنجاح.';
+  }
   await loadComments();
   await loadStats();
 }
@@ -208,8 +285,11 @@ async function submitComment(event) {
 async function submitPortalLogin(event) {
   event.preventDefault();
   const status = qs('portalLoginStatus');
-  const number = String(qs('portalNumber').value || '').replace(/\D/g, '');
-  const password = String(qs('portalPassword').value || '');
+  const numberInput = qs('portalNumber');
+  const passwordInput = qs('portalPassword');
+  if (!numberInput || !passwordInput || !status) return;
+  const number = String(numberInput.value || '').replace(/\D/g, '');
+  const password = String(passwordInput.value || '');
   status.className = 'form-status';
   status.textContent = 'جاري التحقق...';
 
@@ -237,8 +317,12 @@ async function submitPublicPair(event) {
   const form = event.currentTarget;
   const status = qs('publicPairStatus');
   const resultBox = qs('publicPairResult');
-  const number = String(qs('publicPairNumber').value || '').replace(/\D/g, '');
-  const accepted = qs('publicPairAccepted').checked;
+  const numberInput = qs('publicPairNumber');
+  const acceptedInput = qs('publicPairAccepted');
+  if (!numberInput || !acceptedInput || !status || !resultBox) return;
+
+  const number = String(numberInput.value || '').replace(/\D/g, '');
+  const accepted = acceptedInput.checked;
 
   status.className = 'form-status';
   status.textContent = 'جاري تجهيز كود الاقتران...';
@@ -258,19 +342,24 @@ async function submitPublicPair(event) {
   }
 
   state.rawPairCode = String(data.rawCode || '').replace(/[^A-Za-z0-9]/g, '');
-  status.className = 'form-status success';
-  status.textContent = 'تم إنشاء الكود. انسخه الآن ثم الصقه في واتساب مباشرة.';
   setText('publicPairCode', data.code || state.rawPairCode || '—');
   const link = qs('publicPairPanelLink');
   if (link && data.panelUrl) link.href = data.panelUrl;
   resultBox.classList.remove('hidden');
-  startPairCountdown(data.expiresInSeconds || 60);
   form.reset();
+
+  const copied = await copyPairCode(false);
+  status.className = 'form-status success';
+  status.textContent = copied
+    ? 'تم إنشاء الكود الصحيح ونسخه تلقائياً. الصقه الآن داخل واتساب.'
+    : 'تم إنشاء الكود الصحيح. إذا لم يُنسخ تلقائياً استخدم زر النسخ الآن.';
+  startPairCountdown(data.expiresInSeconds || 60);
   await loadStats();
 }
 
 async function init() {
   startThemeCycle();
+  startClock();
   await Promise.all([loadConfig(), loadStats(), loadComments()]);
   const commentForm = qs('commentForm');
   if (commentForm) commentForm.addEventListener('submit', submitComment);
@@ -279,7 +368,7 @@ async function init() {
   const publicPairForm = qs('publicPairForm');
   if (publicPairForm) publicPairForm.addEventListener('submit', submitPublicPair);
   const copyBtn = qs('copyPairCodeBtn');
-  if (copyBtn) copyBtn.addEventListener('click', copyPairCode);
+  if (copyBtn) copyBtn.addEventListener('click', () => copyPairCode(true));
   setInterval(() => {
     loadStats().catch(() => {});
     loadComments().catch(() => {});
