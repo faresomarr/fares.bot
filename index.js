@@ -770,6 +770,8 @@ async function main() {
   registerTelegramHandlers()
 
   web.startWebServer({ getRuntimeStats, monitor })
+  // تشغيل الفاحص الطبّي للجلسات بشكل دوري
+  try { require('./lib/session-doctor').start() } catch (e) { console.warn('[session-doctor] فشل التشغيل:', e?.message || e) }
   await whatsapp.resumeAll()
   if (config.ALERT_ENABLED) {
     monitor.start()

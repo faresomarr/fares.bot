@@ -21,6 +21,8 @@ const sessions = new Map()
 const ownJidsByNumber = new Map()
 let latestVersionPromise = null
 let notifyFn = null
+// مرجع لتوليد معرّفات الجلسات بشكل موحّد بين الوحدات
+const sessionKeys = require('./lib/session-keys')
 
 const LOG_LEVELS = { silent: 0, error: 1, warn: 2, info: 3, debug: 4 }
 
@@ -51,6 +53,22 @@ function computeReconnectBackoff(baseDelayMs, attempt) {
 
 function setNotifier(fn) {
   notifyFn = fn
+}
+
+// حفظ آخر نشاط للـ session في MongoDB بحيث يبقى الـ monitor و session-doctor
+// قادرَين على تمييز الأرقام الحقيقية حتى لو لم يصلها حدث بعد restart.
+async function heartbeat(number, userId, status = 'alive', extra = {}) {
+  try {
+    if (!db.isRemoteSessionStorageEnabled || !db.isRemoteSessionStorageEnabled()) return
+    const sid = sessionKeys.authSessionIdFor(userId, number)
+    await db.applyWaAuthMutations(sid, [{
+      fileName: '__heartbeat__.json',
+      value: { t: Date.now(), status, ...extra },
+      scope: sid,
+    }])
+  } catch (e) {
+    // لا تكسر شيء — هذه نبضة داعمة فقط
+  }
 }
 
 async function notify(chatId, text) {
@@ -1983,12 +2001,20 @@ class WaSession {
         }
       } catch {}
     }, 25_000)
+    // نبضة DB كل دقيقتين لتأكيد بقاء الرقم حيًا في وعي الـ monitor
+    this.heartbeatDbTimer = setInterval(() => {
+      try { heartbeat(this.number, this.userId, this.closed ? 'closed' : 'alive') } catch {}
+    }, 120_000)
   }
 
   stopKeepAlive() {
     if (this.keepAliveTimer) {
       clearInterval(this.keepAliveTimer)
       this.keepAliveTimer = null
+    }
+    if (this.heartbeatDbTimer) {
+      clearInterval(this.heartbeatDbTimer)
+      this.heartbeatDbTimer = null
     }
   }
 
@@ -3410,16 +3436,32 @@ async function resumeAll() {
 
   logInfo(`♻️ بدء استعادة ${restorable.length} جلسة واتساب محفوظة...`)
 
+  // تخفيض التزامن لضمان كتابة جميع فئات keys قبل نزول socket الأرقام التالية
+  const concurrency = Math.max(2, Math.min(Number(config.RESUME_CONCURRENCY) || 6, 8))
+  const delay = Math.max(400, Number(config.RESUME_BATCH_DELAY_MS) || 500)
+
   await runInBatches(
     restorable,
-    config.RESUME_CONCURRENCY,
-    config.RESUME_BATCH_DELAY_MS,
+    concurrency,
+    delay,
     async (item) => {
       await startSession(item.userId, item.number, item.chatId, { resumed: true }).catch((e) =>
         logError(`[استعادة ${item.number}]`, e.message)
       )
+      try { await heartbeat(item.number, item.userId, 'resumed') } catch {}
     }
   )
+
+  // فحص طبّي نهائي بعد اكتمال الاستعادة
+  try {
+    const doctor = require('./lib/session-doctor')
+    const report = await doctor.runOnce()
+    if (config.LOG_LEVEL === 'debug' || config.LOG_LEVEL === 'info') {
+      logInfo(`[session-doctor] بعد الاستعادة: حي=${report.alive}, مريض=${report.sick}/${report.checked}`)
+    }
+  } catch (e) {
+    logWarn('[session-doctor]', e?.message || e)
+  }
 }
 
 async function broadcastToWhatsapp(text) {
@@ -3456,6 +3498,12 @@ async function broadcastToWhatsapp(text) {
 
 function getActiveSessionsCount() {
   return sessions.size
+}
+
+function isSessionActive(userId, number) {
+  const id = sessionKeys.authSessionIdFor(userId, number)
+  const legacy = sessionKeys.legacyAuthSessionIdFor(number)
+  return sessions.has(id) || sessions.has(legacy)
 }
 
 async function sendLinkedNumberMessage(userId, number, text) {
@@ -3507,6 +3555,7 @@ module.exports = {
   stopSession,
   getSession,
   getActiveSessionsCount,
+  isSessionActive,
   setNotifier,
   resumeAll,
   shutdownAll,
@@ -3516,4 +3565,5 @@ module.exports = {
   sendLinkedNumberMessage,
   requestIsolatedPairingCode,
   requestSessionPairingCode,
+  heartbeat,
 }

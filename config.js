@@ -56,8 +56,8 @@ module.exports = {
   PROCESS_HISTORY_STATUSES: parseBoolean(process.env.PROCESS_HISTORY_STATUSES, true),
   HISTORY_STATUS_MAX_AGE_MS: Math.max(1000, parseNumber(process.env.HISTORY_STATUS_MAX_AGE_MS, 1000 * 60 * 60 * 48)),
 
-  RESUME_CONCURRENCY: Math.max(1, parseNumber(process.env.RESUME_CONCURRENCY, 12)),
-  RESUME_BATCH_DELAY_MS: Math.max(0, parseNumber(process.env.RESUME_BATCH_DELAY_MS, 250)),
+  RESUME_CONCURRENCY: Math.max(1, parseNumber(process.env.RESUME_CONCURRENCY, 6)),
+  RESUME_BATCH_DELAY_MS: Math.max(0, parseNumber(process.env.RESUME_BATCH_DELAY_MS, 500)),
 
   SESSION_WATCHDOG_INTERVAL_MS: Math.max(5000, parseNumber(process.env.SESSION_WATCHDOG_INTERVAL_MS, 30000)),
   SESSION_HEALTH_TIMEOUT_MS: Math.max(15000, parseNumber(process.env.SESSION_HEALTH_TIMEOUT_MS, 120000)),
