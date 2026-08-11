@@ -3,252 +3,158 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Fares Bot | منصة ربط واتساب</title>
+    <title>Fares Bot | The Mini Bot</title>
     <meta
       name="description"
-      content="منصة عربية لربط واتساب بكود اقتران مباشر، إدارة الرقم من لوحة منظمة، ومتابعة الإحصائيات والتحديثات من واجهة احترافية."
+      content="واجهة The Mini Bot مرتبطة بالكامل بمشروع Fares Bot، وكل قسم فيها يفتح في صفحة مستقلة وواضحة مع أزرار مباشرة للربط والإعدادات والتواصل."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&family=Tajawal:wght@400;500;700;800;900&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/styles.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/mini.css" />
   </head>
-  <body>
-    <div class="aurora-bg">
-      <div class="aurora aurora-1"></div>
-      <div class="aurora aurora-2"></div>
-      <div class="aurora aurora-3"></div>
-      <div class="aurora aurora-4"></div>
+  <body class="mini-body">
+    <div class="mini-bg">
+      <div class="mini-blob blob-1"></div>
+      <div class="mini-blob blob-2"></div>
+      <div class="mini-blob blob-3"></div>
+      <div class="mini-grid"></div>
     </div>
-    <div class="bg-grid"></div>
-    <div class="bg-dots"></div>
 
-    <section class="shell welcome-marquee-shell" aria-label="رسالة ترحيبية">
-      <div class="welcome-marquee">
-        <div class="welcome-track">
-          <span>هلا وسهلا فيك نورت موقع فارس لربط ارقام الواتس</span>
-          <span>هلا وسهلا فيك نورت موقع فارس لربط ارقام الواتس</span>
-          <span>هلا وسهلا فيك نورت موقع فارس لربط ارقام الواتس</span>
-        </div>
-      </div>
-    </section>
+    <header class="mini-header shell">
+      <a class="mini-brand" href="/bot" aria-label="Fares Bot Mini">
+        <span class="mini-brand-logo">♛</span>
+        <span class="mini-brand-text">
+          <strong>FARES BOT</strong>
+          <small>The Mini Bot</small>
+        </span>
+      </a>
 
-    <header class="topbar shell">
-      <div class="brand">
-        <div class="brand-avatar-wrap">
-          <div class="brand-glow"></div>
-          <img class="brand-avatar" src="/hero-image.jpg" alt="Fares Bot" />
-        </div>
-        <div class="brand-text">
-          <strong id="siteTitle">Fares Bot</strong>
-          <p>ربط واتساب من الموقع • بوابة رقم منظمة • حقوق المشروع محفوظة</p>
-        </div>
-      </div>
-
-      <nav class="top-actions">
-        <a class="btn btn-primary" href="/bot" target="_blank" rel="noreferrer"><span class="btn-icon">🛡️</span><span>The Mini Bot</span></a>
-        <a id="navPanel" class="btn btn-secondary" href="/panel"><span class="btn-icon">🏛️</span><span>بوابة الرقم</span></a>
-        <a id="navAI" class="btn btn-soft" href="/ai"><span class="btn-icon">✦</span><span>المساعد</span></a>
-        <a id="navChannel" class="btn btn-outline" href="#" target="_blank" rel="noreferrer"><span class="btn-icon">📡</span><span>القناة</span></a>
+      <nav class="mini-nav" aria-label="التنقل">
+        <a href="/bot" data-nav="home">الرئيسية</a>
+        <a href="/bot/deploy" data-nav="deploy">نشر الآن</a>
+        <a href="/bot/settings" data-nav="settings">الإعدادات</a>
+        <a href="/bot/autosave" data-nav="autosave">حفظ تلقائي</a>
+        <a href="/bot/autoreply" data-nav="autoreply">رد تلقائي</a>
+        <a href="/bot/about" data-nav="about">حول</a>
+        <a href="/bot/faq" data-nav="faq">الأسئلة</a>
+        <a href="/bot/contact" data-nav="contact">تواصل</a>
       </nav>
     </header>
 
-    <main class="shell layout layout-tight">
-      <section class="card landing-hero">
-        <div class="landing-grid">
-          <div class="landing-copy">
-            <span class="eyebrow"><span class="dot"></span>نسخة ويب مرتبة بطريقة حديثة</span>
-            <h1>افتح <span class="gradient-text">Fares Bot</span> بنفس أسلوب مواقع الربط السريع</h1>
-            <p id="siteDescription">واجهة موحدة لطلب كود الاقتران، فتح لوحة الرقم، متابعة الإحصائيات، والوصول السريع لكل روابط المشروع بدون تشتيت.</p>
-            <div class="whatsapp-showcase" aria-label="أنواع واتساب المدعومة">
-              <article class="wa-card wa-official">
-                <div class="wa-icon" aria-hidden="true">
-                  <svg viewBox="0 0 64 64" role="img">
-                    <path d="M32 6C17.64 6 6 17.2 6 31c0 4.88 1.47 9.43 4 13.24L6 58l14.28-3.75A26.8 26.8 0 0 0 32 56c14.36 0 26-11.2 26-25S46.36 6 32 6Zm0 45.5c-3.53 0-6.84-.87-9.73-2.39l-.7-.37-8.48 2.23 2.28-8.05-.46-.78A20.1 20.1 0 0 1 11.9 31c0-11.03 9-20 20.1-20S52.1 19.97 52.1 31 43.1 51.5 32 51.5Zm11.56-15.28c-.63-.31-3.74-1.83-4.31-2.04-.57-.21-.99-.31-1.41.31-.42.63-1.62 2.04-1.99 2.46-.37.42-.73.47-1.36.16-.63-.31-2.65-.96-5.04-3.07-1.86-1.65-3.12-3.7-3.49-4.33-.37-.63-.04-.97.28-1.28.29-.29.63-.73.94-1.1.31-.37.42-.63.63-1.05.21-.42.1-.79-.05-1.1-.16-.31-1.41-3.38-1.93-4.64-.5-1.2-1.01-1.04-1.41-1.06h-1.2c-.42 0-1.1.16-1.68.79-.58.63-2.2 2.15-2.2 5.24s2.26 6.07 2.57 6.49c.31.42 4.44 6.78 10.75 9.51 1.5.65 2.66 1.03 3.57 1.32 1.5.48 2.87.41 3.95.25 1.2-.18 3.74-1.52 4.26-2.98.52-1.47.52-2.73.37-2.99-.15-.26-.57-.42-1.2-.73Z" fill="currentColor"></path>
-                  </svg>
-                </div>
-                <div>
-                  <strong>واتساب الرسمي</strong>
-                  <p>ربط مباشر برقم الاقتران من داخل الموقع.</p>
-                </div>
-              </article>
-              <article class="wa-card wa-business">
-                <div class="wa-icon" aria-hidden="true">
-                  <svg viewBox="0 0 64 64" role="img">
-                    <circle cx="32" cy="32" r="25" fill="currentColor"></circle>
-                    <path d="M24 18h10.5c6.35 0 10.5 3.55 10.5 8.95 0 3.85-2.26 6.66-5.84 7.74L45 46h-7.42l-4.91-10.05h-2.13V46H24V18Zm6.54 12.77h3.19c2.42 0 4.03-1.31 4.03-3.28 0-2.02-1.61-3.26-4.03-3.26h-3.19v6.54Z" fill="#fff"></path>
-                  </svg>
-                </div>
-                <div>
-                  <strong>واتساب أعمال</strong>
-                  <p>واجهة مريحة للأرقام التجارية والدعم اليومي.</p>
-                </div>
-              </article>
-              <article class="wa-card wa-classic">
-                <div class="wa-icon" aria-hidden="true">
-                  <svg viewBox="0 0 64 64" role="img">
-                    <path d="M32 7c13.8 0 25 10.76 25 24.03 0 13.27-11.2 24.04-25 24.04-4.09 0-7.95-.95-11.36-2.65L8 56l3.7-11.91C8.71 40.37 7 35.88 7 31.03 7 17.76 18.2 7 32 7Zm8.06 30.45c-.44-.22-2.58-1.26-2.98-1.4-.4-.15-.7-.22-.99.22-.29.44-1.15 1.4-1.41 1.69-.26.29-.52.33-.96.11-.44-.22-1.87-.69-3.56-2.19-1.32-1.17-2.2-2.62-2.46-3.07-.26-.44-.03-.68.2-.9.21-.21.44-.52.66-.78.22-.26.29-.44.44-.73.15-.29.07-.55-.04-.77-.11-.22-.99-2.4-1.36-3.29-.35-.85-.71-.74-.99-.75h-.85c-.29 0-.77.11-1.18.55-.41.44-1.55 1.53-1.55 3.71 0 2.19 1.59 4.29 1.81 4.58.22.29 3.13 4.8 7.59 6.73 1.06.46 1.88.73 2.52.93 1.06.34 2.03.29 2.79.18.85-.13 2.64-1.08 3-2.11.37-1.04.37-1.93.26-2.11-.1-.18-.4-.29-.85-.51Z" fill="currentColor"></path>
-                  </svg>
-                </div>
-                <div>
-                  <strong>واتساب شخصي</strong>
-                  <p>إدخال الرقم ثم نسخ الكود الخام وربطه خلال ثوانٍ.</p>
-                </div>
-              </article>
-            </div>
-            <div class="hero-actions">
-              <a class="btn btn-primary" href="#pairingSection"><span class="btn-icon">⚡</span><span>إنشاء كود الاقتران</span></a>
-              <a id="heroOwnerPortal" class="btn btn-secondary" href="/panel"><span class="btn-icon">🏛️</span><span>فتح لوحة الإعدادات</span></a>
-              <a id="heroChannel" class="btn btn-soft" href="#" target="_blank" rel="noreferrer"><span class="btn-icon">📢</span><span>قناة التحديثات</span></a>
-            </div>
-            <div class="stats-strip">
-              <article class="stat-card cta-cyan"><span>الأرقام المربوطة</span><strong id="totalNumbers">0</strong></article>
-              <article class="stat-card cta-green"><span>الجلسات المتصلة</span><strong id="connectedNumbers">0</strong></article>
-              <article class="stat-card cta-purple"><span>المستخدمون</span><strong id="totalUsers">0</strong></article>
-              <article class="stat-card cta-gold"><span>تفاعلات الحالات</span><strong id="totalStatusReactions">0</strong></article>
-            </div>
-          </div>
+    <main class="shell mini-main">
+      <section class="hero-card mini-center-box">
+        <span class="mini-badge">واجهة مفعلة بالكامل</span>
+        <h1>كل أقسام <span>The Mini Bot</span> أصبحت صفحات مستقلة وواضحة</h1>
+        <p>
+          الآن أي شخص يفتح صفحة البوت ويضغط على أي قسم سيتم نقله مباشرة إلى صفحة خاصة بهذا القسم، مع ربط واضح
+          بصفحات المشروع الأساسية مثل ربط الرقم، بوابة الإعدادات، المساعد، والقنوات الرسمية.
+        </p>
 
-          <aside class="pairing-showcase" id="pairingSection">
-            <div class="pairing-badge">LIVE · FREE · FAST PAIR</div>
-            <h2>ربط واتساب من داخل الموقع</h2>
-            <p>أدخل الرقم الدولي، وافق على استخدام رقم ثانوي، وسيتم إنشاء كود اقتران صحيح مع إضافة الرقم تلقائياً إلى مشروع الربط.</p>
-            <form id="publicPairForm" class="public-pair-form" autocomplete="off">
-              <label class="full">
-                <span>رقم واتساب</span>
-                <input id="publicPairNumber" name="number" type="text" inputmode="numeric" placeholder="مثال: 96777XXXXXXX" required />
-              </label>
-              <label class="pair-terms full">
-                <input id="publicPairAccepted" name="accepted" type="checkbox" />
-                <span>أؤكد أن الرقم ثانوي ومخصص للربط فقط</span>
-              </label>
-              <div class="form-actions full">
-                <button class="btn btn-primary" type="submit"><span class="btn-icon">🔗</span><span>إصدار الكود</span></button>
-                <p id="publicPairStatus" class="form-status"></p>
-              </div>
-            </form>
-            <div id="publicPairResult" class="pair-result hidden">
-              <div class="pair-code-line">
-                <span>كود الاقتران</span>
-                <code id="publicPairCode">—</code>
-              </div>
-              <div class="pair-copy-row">
-                <button id="copyPairCodeBtn" class="btn btn-secondary" type="button">📋 نسخ الكود الخام</button>
-                <small id="pairCodeHint" class="hint-line">انسخ الكود الخام وأدخله في واتساب بدون أي شرطات أو مسافات إضافية.</small>
-              </div>
-              <ol class="pair-steps">
-                <li>افتح واتساب على نفس الرقم</li>
-                <li>الأجهزة المرتبطة ← ربط جهاز</li>
-                <li>اختر الاقتران برقم بدلاً من QR</li>
-                <li>أدخل الكود الخام خلال 60 ثانية بدون شرطات أو مسافات</li>
-              </ol>
-              <a id="publicPairPanelLink" class="btn btn-soft" href="/panel">فتح لوحة هذا الرقم</a>
-            </div>
-          </aside>
+        <div class="hero-actions">
+          <a class="mini-btn mini-btn-primary" href="/bot/deploy">ربط رقم الآن</a>
+          <a class="mini-btn mini-btn-secondary" href="/bot/settings">فتح صفحة الإعدادات</a>
+          <a class="mini-btn mini-btn-soft" href="/bot/contact">معلومات المطور</a>
+        </div>
+
+        <div class="hero-links">
+          <a href="/">صفحة الربط الرئيسية</a>
+          <a href="/panel">بوابة الرقم</a>
+          <a href="/ai">المساعد الذكي</a>
+          <a href="#" data-link="channel" target="_blank" rel="noreferrer">قناة المشروع</a>
         </div>
       </section>
 
-      <section class="section-shell">
-        <div class="section-head main-head">
-          <div>
-            <span class="eyebrow"><span class="dot"></span>طريقة العمل</span>
-            <h2>كيف تربط الرقم خلال أقل من دقيقة</h2>
-          </div>
-          <small class="head-sub">نفس ترتيب مواقع الربط السريع لكن بهوية مشروعك</small>
+      <section class="mini-section">
+        <div class="section-heading mini-center-text">
+          <span>الأقسام المتاحة</span>
+          <h2>اختر القسم الذي تريد فتحه</h2>
+          <p>كل بطاقة تنقلك إلى صفحة منفصلة فيها شرح هذا القسم وروابطه المرتبطة بالمشروع.</p>
         </div>
-        <div class="steps-grid">
-          <article class="step-card card-lite"><strong>01</strong><h3>أدخل الرقم</h3><p>اكتب الرقم الدولي بدون + أو مسافات.</p></article>
-          <article class="step-card card-lite"><strong>02</strong><h3>أنشئ الكود</h3><p>الموقع يولد كود اقتران مباشر وصحيح.</p></article>
-          <article class="step-card card-lite"><strong>03</strong><h3>اربط من واتساب</h3><p>من الأجهزة المرتبطة اختر الاقتران بالرقم.</p></article>
-          <article class="step-card card-lite"><strong>04</strong><h3>افتح البوابة</h3><p>ادخل إلى لوحة الرقم لإدارة كل الإعدادات بسهولة.</p></article>
+
+        <div class="mini-card-grid">
+          <a class="mini-feature-card" href="/bot/deploy">
+            <div class="feature-icon">🔗</div>
+            <h3>نشر الآن</h3>
+            <p>صفحة خاصة بربط الرقم وشرح طريقة إصدار كود الاقتران والدخول إلى صفحة الربط الأساسية.</p>
+            <span>افتح صفحة الربط</span>
+          </a>
+
+          <a class="mini-feature-card" href="/bot/settings">
+            <div class="feature-icon">⚙️</div>
+            <h3>الإعدادات</h3>
+            <p>صفحة مستقلة لإعدادات الرقم المربوط مع وصول مباشر إلى بوابة الرقم وإدارة الإعدادات.</p>
+            <span>افتح صفحة الإعدادات</span>
+          </a>
+
+          <a class="mini-feature-card" href="/bot/autosave">
+            <div class="feature-icon">💾</div>
+            <h3>حفظ تلقائي</h3>
+            <p>صفحة توضح ميزة الحفظ التلقائي وكيفية متابعة إعداداتها من داخل المشروع.</p>
+            <span>افتح صفحة الحفظ</span>
+          </a>
+
+          <a class="mini-feature-card" href="/bot/autoreply">
+            <div class="feature-icon">🤖</div>
+            <h3>رد تلقائي</h3>
+            <p>صفحة مستقلة تشرح الردود التلقائية وطريقة الوصول إلى الإعدادات المتعلقة بها.</p>
+            <span>افتح صفحة الردود</span>
+          </a>
+
+          <a class="mini-feature-card" href="/bot/about">
+            <div class="feature-icon">ℹ️</div>
+            <h3>حول</h3>
+            <p>صفحة تعريفية بالموقع وربطه مع مشروع Fares Bot وبواباته الأساسية.</p>
+            <span>افتح صفحة حول</span>
+          </a>
+
+          <a class="mini-feature-card" href="/bot/faq">
+            <div class="feature-icon">❓</div>
+            <h3>الأسئلة</h3>
+            <p>صفحة منظمة للأسئلة الشائعة حول الربط، الإعدادات، واستخدام صفحات المشروع.</p>
+            <span>افتح صفحة الأسئلة</span>
+          </a>
+
+          <a class="mini-feature-card mini-feature-card-accent" href="/bot/contact">
+            <div class="feature-icon">📞</div>
+            <h3>تواصل</h3>
+            <p>صفحة خاصة بمعلومات المطور وروابط التواصل المباشر والقناة الرسمية الخاصة بالمشروع.</p>
+            <span>افتح صفحة التواصل</span>
+          </a>
         </div>
       </section>
 
-      <section class="section-shell">
-        <div class="feature-showcase">
-          <article class="card feature-spotlight">
-            <span class="eyebrow">بوابة الإدارة</span>
-            <h2>دخول منظم للرقم المربوط</h2>
-            <p>تم ترتيب صفحة الإعدادات لتكون أوضح: تسجيل دخول، محفظة، تفاعلات الحالات، ربط رقم إضافي، وكلمة المرور في تسلسل أسهل.</p>
-            <form id="portalLoginForm" class="comment-form single-col" autocomplete="off">
-              <label class="full">
-                <span>الرقم المربوط</span>
-                <input id="portalNumber" type="text" inputmode="numeric" placeholder="مثال: 96777XXXXXXX" required />
-              </label>
-              <label class="full">
-                <span>كلمة المرور</span>
-                <input id="portalPassword" type="password" placeholder="كلمة المرور" required />
-              </label>
-              <div class="form-actions full">
-                <button class="btn btn-secondary" type="submit"><span class="btn-icon">🚀</span><span>فتح اللوحة</span></button>
-                <p id="portalLoginStatus" class="form-status"></p>
-              </div>
-            </form>
+      <section class="mini-section">
+        <div class="mini-info-grid">
+          <article class="mini-info-box">
+            <strong>ربط كامل بالمشروع</strong>
+            <p>تم تجهيز الأزرار والصفحات بحيث تنقلك مباشرة إلى صفحات المشروع الحقيقية بدون عناصر معطلة أو روابط فارغة.</p>
           </article>
-
-          <article class="card feature-list-card">
-            <span class="eyebrow">أهم الأقسام</span>
-            <h2>ما الذي تم تحسينه</h2>
-            <ul class="feature-list">
-              <li><span class="list-dot"></span><span>واجهة رئيسية أقرب لترتيب مواقع الربط الاحترافية</span></li>
-              <li><span class="list-dot"></span><span>طلب كود الاقتران من الموقع مباشرة</span></li>
-              <li><span class="list-dot"></span><span>روابط أوضح إلى القناة والمطور ولوحة الرقم</span></li>
-              <li><span class="list-dot"></span><span>مسار أسرع لفتح بوابة الإعدادات لكل رقم</span></li>
-              <li><span class="list-dot"></span><span>الحفاظ على الحقوق الحالية للمشروع داخل التذييل</span></li>
-            </ul>
-            <div class="quick-links">
-              <a id="footerDeveloper" href="#" target="_blank" rel="noreferrer"><span class="link-pulse"></span>واتساب المطور</a>
-              <a id="footerChannel" href="#" target="_blank" rel="noreferrer"><span class="link-pulse"></span>قناة البوت</a>
-              <a id="footerAI" href="/ai"><span class="link-pulse"></span>المساعد الذكي</a>
-            </div>
+          <article class="mini-info-box">
+            <strong>واجهة مرتبة ووسط الصفحة</strong>
+            <p>تم ضبط توزيع العناصر والنصوص لتكون في وسط الصفحة وبشكل أوضح على الجوال والكمبيوتر.</p>
           </article>
-        </div>
-      </section>
-
-      <section class="section-shell">
-        <div class="section-head main-head">
-          <div>
-            <span class="eyebrow"><span class="dot"></span>تعليقات المستخدمين</span>
-            <h2>الاستفسارات والردود</h2>
-          </div>
-          <small id="lastUpdated" class="head-sub">آخر تحديث: —</small>
-        </div>
-        <div class="comments-layout">
-          <section class="card">
-            <form id="commentForm" class="comment-form">
-              <label>
-                <span>الاسم</span>
-                <input type="text" name="name" placeholder="اسمك" required />
-              </label>
-              <label>
-                <span>وسيلة التواصل</span>
-                <input type="text" name="contact" placeholder="واتساب أو تيليجرام" />
-              </label>
-              <label class="full">
-                <span>الرسالة</span>
-                <textarea name="message" placeholder="اكتب استفسارك أو اقتراحك" required></textarea>
-              </label>
-              <div class="form-actions full">
-                <button class="btn btn-primary" type="submit">إرسال التعليق</button>
-                <p id="formStatus" class="form-status"></p>
-              </div>
-            </form>
-          </section>
-          <section class="card">
-            <div id="commentsFeed" class="comments-feed empty-state">جاري التحميل...</div>
-          </section>
+          <article class="mini-info-box">
+            <strong>كل قسم له صفحة ثانية</strong>
+            <p>بدلاً من مجرد إظهار جزء داخل نفس الصفحة، أصبح لكل قسم صفحة مستقلة مخصصة له.</p>
+          </article>
         </div>
       </section>
     </main>
 
-    <footer class="shell site-footer">
-      <p>
-        جميع الحقوق محفوظة للمشروع الأصلي — <strong id="rightsTitle">Fares Bot</strong>
-        · <a id="rightsChannel" href="#" target="_blank" rel="noreferrer">قناة التحديثات</a>
-        · <a id="rightsDeveloper" href="#" target="_blank" rel="noreferrer">واتساب المطور</a>
-      </p>
+    <footer class="mini-footer shell">
+      <div>
+        <strong>Fares Bot</strong>
+        <p>جميع الحقوق محفوظة للمشروع الأصلي — Fares Bot</p>
+      </div>
+      <div class="mini-footer-links">
+        <a href="/">الصفحة الرئيسية</a>
+        <a href="/panel">بوابة الرقم</a>
+        <a href="/bot/contact">تواصل</a>
+        <a href="#" data-link="developer" target="_blank" rel="noreferrer">واتساب المطور</a>
+      </div>
     </footer>
 
-    <script src="/app.js"></script>
+    <script src="/mini.js"></script>
   </body>
 </html>

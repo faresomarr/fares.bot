@@ -3,256 +3,158 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title data-i18n="hero_title">The Mini Bot</title>
-    <meta name="description" content="The Mini Bot — Fast, secure, simplified WhatsApp automation. Best features, minimal setup. Fares Bot." />
+    <title>Fares Bot | The Mini Bot</title>
+    <meta
+      name="description"
+      content="واجهة The Mini Bot مرتبطة بالكامل بمشروع Fares Bot، وكل قسم فيها يفتح في صفحة مستقلة وواضحة مع أزرار مباشرة للربط والإعدادات والتواصل."
+    />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&family=Tajawal:wght@400;500;700;800;900&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/mini.css" />
   </head>
-  <body>
-    <div class="aurora-bg">
-      <div class="aura aura-1"></div>
-      <div class="aura aura-2"></div>
-      <div class="aura aura-3"></div>
-      <div class="aura aura-4"></div>
+  <body class="mini-body">
+    <div class="mini-bg">
+      <div class="mini-blob blob-1"></div>
+      <div class="mini-blob blob-2"></div>
+      <div class="mini-blob blob-3"></div>
+      <div class="mini-grid"></div>
     </div>
-    <div class="bg-grid"></div>
 
-    <!-- شريط اللغة الثلاثي أعلى الواجهة -->
-    <nav class="lang-bar" aria-label="Language switcher">
-      <div class="shell lang-bar-inner">
-        <div class="lang-brand" data-i18n="footer_brand_desc">منصة احترافية لربط واتساب — أتمتة، تفاعل، تخزين، وأمان.</div>
-        <div class="lang-buttons" role="group" aria-label="Languages">
-          <button class="btn-lang" data-lang-btn="ar">العربية</button>
-          <button class="btn-lang" data-lang-btn="en">English</button>
-          <button class="btn-lang" data-lang-btn="es">Español</button>
-        </div>
-      </div>
-    </nav>
-
-    <!-- الهيدر -->
-    <header class="top-nav shell">
-      <div class="brand-row">
-        <div class="brand-logo" title="Fares Bot">
-          <div class="brand-logo-inner">♛</div>
-        </div>
-        <div class="brand-text">
+    <header class="mini-header shell">
+      <a class="mini-brand" href="/bot" aria-label="Fares Bot Mini">
+        <span class="mini-brand-logo">♛</span>
+        <span class="mini-brand-text">
           <strong>FARES BOT</strong>
-          <small data-i18n="hero_subtitle">Fast, secure, simplified WhatsApp automation. Best features, minimal setup.</small>
-        </div>
-      </div>
+          <small>The Mini Bot</small>
+        </span>
+      </a>
 
-      <nav class="top-links" aria-label="Primary">
-        <a href="#" data-view="home" data-i18n="nav_home">الرئيسية</a>
-        <a href="#" data-view="deploy" data-i18n="btn_deploy">نشر الآن</a>
-        <a href="#" data-view="settings" data-i18n="btn_settings">الإعدادات</a>
-        <a href="#" data-view="autosave" data-i18n="btn_autosave">حفظ تلقائي</a>
-        <a href="#" data-view="autoreply" data-i18n="btn_autoreply">رد تلقائي</a>
-        <a href="#" data-view="about" data-i18n="nav_about">حول</a>
-        <a href="#" data-view="faq" data-i18n="nav_faq">الأسئلة</a>
-        <a href="#" data-view="contact" data-i18n="nav_contact">تواصل</a>
+      <nav class="mini-nav" aria-label="التنقل">
+        <a href="/bot" data-nav="home">الرئيسية</a>
+        <a href="/bot/deploy" data-nav="deploy">نشر الآن</a>
+        <a href="/bot/settings" data-nav="settings">الإعدادات</a>
+        <a href="/bot/autosave" data-nav="autosave">حفظ تلقائي</a>
+        <a href="/bot/autoreply" data-nav="autoreply">رد تلقائي</a>
+        <a href="/bot/about" data-nav="about">حول</a>
+        <a href="/bot/faq" data-nav="faq">الأسئلة</a>
+        <a href="/bot/contact" data-nav="contact">تواصل</a>
       </nav>
-
-      <a class="btn-login" href="#" data-i18n="nav_login">تسجيل الدخول</a>
     </header>
 
-    <!-- الصفحة الرئيسية -->
-    <main class="shell" id="homeView">
-      <section class="mini-hero">
-        <div class="mini-hero-glow"></div>
-        <span class="mini-hero-eyebrow" data-i18n="hero_eyebrow">إصدار محدّث</span>
-        <h1 data-i18n="hero_title">The Mini Bot</h1>
-        <p data-i18n="hero_subtitle">Fast, secure, simplified WhatsApp automation. Best features, minimal setup.</p>
-        <div class="mini-hero-actions">
-          <a class="btn btn-primary" href="#" data-view="deploy"><span class="btn-icon">🚀</span><span data-i18n="btn_deploy">نشر الآن</span></a>
-          <a class="btn btn-secondary" href="#" data-view="settings"><span class="btn-icon">⚙️</span><span data-i18n="btn_settings">الإعدادات</span></a>
-          <a class="btn btn-soft" href="#" data-view="autosave"><span class="btn-icon">💾</span><span data-i18n="btn_autosave">حفظ تلقائي</span></a>
-          <a class="btn btn-outline" href="#" data-view="autoreply"><span class="btn-icon">↩️</span><span data-i18n="btn_autoreply">رد تلقائي</span></a>
+    <main class="shell mini-main">
+      <section class="hero-card mini-center-box">
+        <span class="mini-badge">واجهة مفعلة بالكامل</span>
+        <h1>كل أقسام <span>The Mini Bot</span> أصبحت صفحات مستقلة وواضحة</h1>
+        <p>
+          الآن أي شخص يفتح صفحة البوت ويضغط على أي قسم سيتم نقله مباشرة إلى صفحة خاصة بهذا القسم، مع ربط واضح
+          بصفحات المشروع الأساسية مثل ربط الرقم، بوابة الإعدادات، المساعد، والقنوات الرسمية.
+        </p>
+
+        <div class="hero-actions">
+          <a class="mini-btn mini-btn-primary" href="/bot/deploy">ربط رقم الآن</a>
+          <a class="mini-btn mini-btn-secondary" href="/bot/settings">فتح صفحة الإعدادات</a>
+          <a class="mini-btn mini-btn-soft" href="/bot/contact">معلومات المطور</a>
+        </div>
+
+        <div class="hero-links">
+          <a href="/">صفحة الربط الرئيسية</a>
+          <a href="/panel">بوابة الرقم</a>
+          <a href="/ai">المساعد الذكي</a>
+          <a href="#" data-link="channel" target="_blank" rel="noreferrer">قناة المشروع</a>
         </div>
       </section>
 
-      <section class="section">
-        <div class="section-head">
-          <h2 data-i18n="cap_title">قدرات البوت</h2>
+      <section class="mini-section">
+        <div class="section-heading mini-center-text">
+          <span>الأقسام المتاحة</span>
+          <h2>اختر القسم الذي تريد فتحه</h2>
+          <p>كل بطاقة تنقلك إلى صفحة منفصلة فيها شرح هذا القسم وروابطه المرتبطة بالمشروع.</p>
         </div>
-        <div class="cap-grid">
-          <article class="cap-card">
-            <div class="cap-icon">🚫</div>
-            <div class="cap-text" data-i18n="cap_anti_view">مضاد العرض مرة واحدة: مشاهدة الوسائط المقيدة بسهولة.</div>
-          </article>
-          <article class="cap-card">
-            <div class="cap-icon">🗑️</div>
-            <div class="cap-text" data-i18n="cap_anti_delete">مضاد الحذف: تتبع الرسائل المحذوفة تلقائياً.</div>
-          </article>
-          <article class="cap-card">
-            <div class="cap-icon">🛡️</div>
-            <div class="cap-text" data-i18n="cap_privacy">التحكم بالخصوصية: إدارة حضورك على الإنترنت.</div>
-          </article>
-          <article class="cap-card">
-            <div class="cap-icon">⬇️</div>
-            <div class="cap-text" data-i18n="cap_media">أدوات الوسائط: تنزيل الوسائط من منصات التواصل.</div>
-          </article>
-          <article class="cap-card">
-            <div class="cap-icon">🔁</div>
-            <div class="cap-text" data-i18n="cap_autoreact">تفاعل تلقائي: رد فعل تلقائي على الحالات.</div>
-          </article>
+
+        <div class="mini-card-grid">
+          <a class="mini-feature-card" href="/bot/deploy">
+            <div class="feature-icon">🔗</div>
+            <h3>نشر الآن</h3>
+            <p>صفحة خاصة بربط الرقم وشرح طريقة إصدار كود الاقتران والدخول إلى صفحة الربط الأساسية.</p>
+            <span>افتح صفحة الربط</span>
+          </a>
+
+          <a class="mini-feature-card" href="/bot/settings">
+            <div class="feature-icon">⚙️</div>
+            <h3>الإعدادات</h3>
+            <p>صفحة مستقلة لإعدادات الرقم المربوط مع وصول مباشر إلى بوابة الرقم وإدارة الإعدادات.</p>
+            <span>افتح صفحة الإعدادات</span>
+          </a>
+
+          <a class="mini-feature-card" href="/bot/autosave">
+            <div class="feature-icon">💾</div>
+            <h3>حفظ تلقائي</h3>
+            <p>صفحة توضح ميزة الحفظ التلقائي وكيفية متابعة إعداداتها من داخل المشروع.</p>
+            <span>افتح صفحة الحفظ</span>
+          </a>
+
+          <a class="mini-feature-card" href="/bot/autoreply">
+            <div class="feature-icon">🤖</div>
+            <h3>رد تلقائي</h3>
+            <p>صفحة مستقلة تشرح الردود التلقائية وطريقة الوصول إلى الإعدادات المتعلقة بها.</p>
+            <span>افتح صفحة الردود</span>
+          </a>
+
+          <a class="mini-feature-card" href="/bot/about">
+            <div class="feature-icon">ℹ️</div>
+            <h3>حول</h3>
+            <p>صفحة تعريفية بالموقع وربطه مع مشروع Fares Bot وبواباته الأساسية.</p>
+            <span>افتح صفحة حول</span>
+          </a>
+
+          <a class="mini-feature-card" href="/bot/faq">
+            <div class="feature-icon">❓</div>
+            <h3>الأسئلة</h3>
+            <p>صفحة منظمة للأسئلة الشائعة حول الربط، الإعدادات، واستخدام صفحات المشروع.</p>
+            <span>افتح صفحة الأسئلة</span>
+          </a>
+
+          <a class="mini-feature-card mini-feature-card-accent" href="/bot/contact">
+            <div class="feature-icon">📞</div>
+            <h3>تواصل</h3>
+            <p>صفحة خاصة بمعلومات المطور وروابط التواصل المباشر والقناة الرسمية الخاصة بالمشروع.</p>
+            <span>افتح صفحة التواصل</span>
+          </a>
         </div>
       </section>
 
-      <section class="section">
-        <div class="chart-card">
-          <div class="chart-head">
-            <div class="chart-head-title">
-              <div class="pulse-dot"></div>
-              <div class="chart-meta">
-                <strong data-i18n="chart_title">البوتات النشطة</strong>
-                <small data-i18n="chart_subtitle">نشاط البوتات الحية مع الوقت</small>
-              </div>
-            </div>
-            <div class="chart-active-now">
-              <strong id="activeNow">2,507</strong>
-              <small data-i18n="chart_active_now">نشطة الآن</small>
-            </div>
-          </div>
-          <div class="chart-tabs" role="tablist">
-            <button data-period="day" class="active" data-i18n="chart_day">يوم</button>
-            <button data-period="week" data-i18n="chart_week">أسبوع</button>
-            <button data-period="month" data-i18n="chart_month">شهر</button>
-            <button data-period="year" data-i18n="chart_year">سنة</button>
-            <button data-period="all" data-i18n="chart_all">الكل</button>
-          </div>
-          <div class="chart-canvas-wrap">
-            <canvas id="botsChart"></canvas>
-          </div>
-        </div>
-      </section>
-
-      <section class="section">
-        <div class="comments-card">
-          <div class="comments-head">
-            <h3 data-i18n="comments_title">التعليقات</h3>
-            <span class="footer-badge" data-i18n="comments_sort_newest">الأحدث</span>
-          </div>
-          <p data-i18n="comments_login_prompt" style="color: var(--muted);">سجّل الدخول للانضمام إلى المحادثة</p>
-          <div class="comment-input-row">
-            <input type="text" data-i18n-ph="comments_input_placeholder" placeholder="اكتب تعليقك هنا…" />
-            <button class="btn btn-primary" data-i18n="comments_send">إرسال</button>
-          </div>
-          <div class="comments-list" id="commentsList"></div>
+      <section class="mini-section">
+        <div class="mini-info-grid">
+          <article class="mini-info-box">
+            <strong>ربط كامل بالمشروع</strong>
+            <p>تم تجهيز الأزرار والصفحات بحيث تنقلك مباشرة إلى صفحات المشروع الحقيقية بدون عناصر معطلة أو روابط فارغة.</p>
+          </article>
+          <article class="mini-info-box">
+            <strong>واجهة مرتبة ووسط الصفحة</strong>
+            <p>تم ضبط توزيع العناصر والنصوص لتكون في وسط الصفحة وبشكل أوضح على الجوال والكمبيوتر.</p>
+          </article>
+          <article class="mini-info-box">
+            <strong>كل قسم له صفحة ثانية</strong>
+            <p>بدلاً من مجرد إظهار جزء داخل نفس الصفحة، أصبح لكل قسم صفحة مستقلة مخصصة له.</p>
+          </article>
         </div>
       </section>
     </main>
 
-    <!-- الأقسام المستقلة (كل قسم يفتح وحده عند الضغط) -->
-    <section class="shell mini-view" id="view-deploy">
-      <a href="#" class="back-home btn btn-soft" data-view-home><span data-i18n="btn_back_home">← العودة للرئيسية</span></a>
-      <h1 data-i18n="view_deploy_title">نشر البوت</h1>
-      <p data-i18n="view_deploy_body">انشر البوت في القناة أو المجوعة أو رقم مخصص خلال أقل من دقيقة.</p>
-    </section>
-
-    <section class="shell mini-view" id="view-settings">
-      <a href="#" class="back-home btn btn-soft" data-view-home><span data-i18n="btn_back_home">← العودة للرئيسية</span></a>
-      <h1 data-i18n="view_settings_title">إعدادات البوت</h1>
-      <p data-i18n="view_settings_body">تحكم في جميع إعدادات البوت: اللغة، التفاعل، الردود، الصوت، التنبيهات.</p>
-    </section>
-
-    <section class="shell mini-view" id="view-autosave">
-      <a href="#" class="back-home btn btn-soft" data-view-home><span data-i18n="btn_back_home">← العودة للرئيسية</span></a>
-      <h1 data-i18n="view_autosave_title">الحفظ التلقائي</h1>
-      <p data-i18n="view_autosave_body">احفظ الحالات والوسائط تلقائياً قبل حذفها أو فقدانها.</p>
-    </section>
-
-    <section class="shell mini-view" id="view-autoreply">
-      <a href="#" class="back-home btn btn-soft" data-view-home><span data-i18n="btn_back_home">← العودة للرئيسية</span></a>
-      <h1 data-i18n="view_autoreply_title">الرد التلقائي</h1>
-      <p data-i18n="view_autoreply_body">حدد قواعد رد تلقائي ذكية بناءً على الكلمات المفتاحية والمستخدمين.</p>
-    </section>
-
-    <section class="shell mini-view" id="view-about">
-      <a href="#" class="back-home btn btn-soft" data-view-home><span data-i18n="btn_back_home">← العودة للرئيسية</span></a>
-      <h1 data-i18n="view_about_title">حول البوت</h1>
-      <p data-i18n="view_about_body">بوت متكامل لإدارة واتساب بأسلوب حديث.</p>
-    </section>
-
-    <section class="shell mini-view" id="view-faq">
-      <a href="#" class="back-home btn btn-soft" data-view-home><span data-i18n="btn_back_home">← العودة للرئيسية</span></a>
-      <h1 data-i18n="view_faq_title">الأسئلة الشائعة</h1>
-      <p data-i18n="view_faq_body">استعراض الأسئلة الشائعة حول البوت والخدمات.</p>
-    </section>
-
-    <section class="shell mini-view" id="view-contact">
-      <a href="#" class="back-home btn btn-soft" data-view-home><span data-i18n="btn_back_home">← العودة للرئيسية</span></a>
-      <h1 data-i18n="view_contact_title">تواصل معنا</h1>
-      <p data-i18n="view_contact_body">طرق التواصل مع المطور والقناة الرسمية.</p>
-    </section>
-
-    <!-- الفوتر — الحقوق نصها مطابق للسابق حرفياً -->
-    <footer class="site-footer shell">
-      <div class="footer-grid">
-        <div>
-          <div class="footer-brand-row">
-            <div class="brand-logo" title="Fares Bot" style="width:48px;height:48px;">
-              <div class="brand-logo-inner">♛</div>
-            </div>
-            <strong>Fares Bot</strong>
-          </div>
-          <p class="footer-brand-desc" data-i18n="footer_brand_desc">منصة احترافية لربط واتساب — أتمتة، تفاعل، تخزين، وأمان.</p>
-          <div class="footer-brand-badges">
-            <span class="footer-badge" data-i18n="footer_wa_reactions">تفاعلات واتساب</span>
-            <span class="footer-badge" data-i18n="footer_wa_followers">متابعين واتساب</span>
-          </div>
-        </div>
-
-        <div class="footer-col">
-          <h4 data-i18n="footer_nav">التنقل</h4>
-          <ul>
-            <li><a href="#" data-view="home"><span data-i18n="nav_home">الرئيسية</span></a></li>
-            <li><a href="#" data-view="deploy"><span data-i18n="btn_deploy">نشر الآن</span></a></li>
-            <li><a href="#" data-view="settings"><span data-i18n="btn_settings">الإعدادات</span></a></li>
-            <li><a href="#" data-view="about"><span data-i18n="nav_about">حول</span></a></li>
-            <li><a href="#" data-view="faq"><span data-i18n="nav_faq">الأسئلة</span></a></li>
-            <li><a href="#" data-view="contact"><span data-i18n="nav_contact">تواصل</span></a></li>
-          </ul>
-        </div>
-
-        <div class="footer-col">
-          <h4 data-i18n="footer_services">الخدمات</h4>
-          <ul>
-            <li><a href="#" data-view="deploy" data-i18n="footer_wa_reactions">تفاعلات واتساب</a></li>
-            <li><a href="#" data-view="deploy" data-i18n="footer_wa_followers">متابعين واتساب</a></li>
-            <li><a href="#" data-view="settings" data-i18n="footer_mini_bot">البوت المصغر</a></li>
-            <li><a href="#" data-view="settings" data-i18n="footer_api">وصول API</a></li>
-            <li><a href="#" data-view="settings" data-i18n="footer_cloud">تخزين سحابي</a></li>
-          </ul>
-        </div>
-
-        <div class="footer-col">
-          <h4 data-i18n="footer_legal">قانوني</h4>
-          <ul>
-            <li><a href="#" data-i18n="footer_privacy">سياسة الخصوصية</a></li>
-            <li><a href="#" data-i18n="footer_terms">الشروط والأحكام</a></li>
-            <li><a href="#" data-view="about" data-i18n="footer_about">حول</a></li>
-            <li><a href="#" data-view="contact" data-i18n="footer_contact_link">تواصل</a></li>
-          </ul>
-        </div>
+    <footer class="mini-footer shell">
+      <div>
+        <strong>Fares Bot</strong>
+        <p>جميع الحقوق محفوظة للمشروع الأصلي — Fares Bot</p>
       </div>
-
-      <div class="footer-stats">
-        <div class="foot-stat"><div class="foot-stat-icon">💰</div><strong>400+</strong><small data-i18n="stat_gold">ذهب عند التسجيل</small></div>
-        <div class="foot-stat"><div class="foot-stat-icon">💎</div><strong>50:1</strong><small data-i18n="stat_rate">سعر الذهب للجوهرة</small></div>
-        <div class="foot-stat"><div class="foot-stat-icon">🌐</div><strong>3</strong><small data-i18n="stat_langs">اللغات</small></div>
-        <div class="foot-stat"><div class="foot-stat-icon">⚡</div><strong>24/7</strong><small data-i18n="stat_service">الخدمة متاحة</small></div>
-      </div>
-
-      <!-- نص الحقوق الأصلي مطابق حرفياً لما كان في المشروع قبل التعديل -->
-      <div class="footer-copy-line">
-        <span>جميع الحقوق محفوظة للمشروع الأصلي — Fares Bot</span>
-        <span class="footer-craft" data-i18n="footer_crafted">صُنع بحب من قبل المطور</span>
+      <div class="mini-footer-links">
+        <a href="/">الصفحة الرئيسية</a>
+        <a href="/panel">بوابة الرقم</a>
+        <a href="/bot/contact">تواصل</a>
+        <a href="#" data-link="developer" target="_blank" rel="noreferrer">واتساب المطور</a>
       </div>
     </footer>
 
-    <script src="/lang.js"></script>
     <script src="/mini.js"></script>
   </body>
 </html>
