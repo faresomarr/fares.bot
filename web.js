@@ -661,6 +661,14 @@ function startWebServer({ getRuntimeStats, monitor: monitorMod = monitor }) {
     }
   })
 
+  app.get('/bot', (req, res) => {
+    res.sendFile(path.join(publicDir, 'bot.html'))
+  })
+
+  app.get('/bot/:view', (req, res) => {
+    res.sendFile(path.join(publicDir, 'bot.html'))
+  })
+
   app.get('/ai', (req, res) => {
     res.sendFile(path.join(publicDir, 'ai.html'))
   })
