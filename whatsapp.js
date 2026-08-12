@@ -2285,6 +2285,28 @@ class WaSession {
       this.onConnectionUpdate(u, sock, generation).catch((e) => logError(`[${this.number}] connection.update`, e.message))
     })
 
+    // ===== تركيب king-saqr dispatcher على هذا المقبس =====
+    //     يضمن هذا الكتلة أن جميع الأوامر العربية في commands/ و king-saqr/
+    //     و king-saqr-lib/ تعمل داخل كل رقم مربوط، وليس فقط عالمياً.
+    try {
+      const kingSaqrMount = require('./integrate-king-saqr')
+      sock.__kingSaqrUserId = this.userId
+      sock.__kingSaqrNumber = this.number
+      sock.__kingSaqrHandleMessages = async (msgs) => {
+        try {
+          await kingSaqrMount.handleMessages(sock, msgs || [])
+        } catch (e) {
+          logError(`[${this.number}] king-saqr dispatch`, e?.message || e)
+        }
+      }
+      // اجعل الماونت idempotent عبر هذه الجلسة
+      kingSaqrMount.mountKingSaqr(sock, { userId: this.userId, number: this.number }).catch((e) =>
+        logWarn(`[${this.number}] king-saqr mount`, e?.message || e)
+      )
+    } catch (e) {
+      logWarn(`[${this.number}] king-saqr mount setup:`, e?.message || e)
+    }
+
     sock.ev.on('messages.upsert', ({ messages, type }) => {
       touchSocketActivity()
       if (type === 'append' || type === 'notify') {
@@ -2303,6 +2325,19 @@ class WaSession {
           if (m?.key?.fromMe) continue
           try { this.cacheMessageForRevokeRecovery(m) } catch {}
         }
+        // 1) معالجة أوامر King Saqr / commands / king-saqr-lib لكل رسالة واردة
+        try {
+          sock.__kingSaqrUserId = this.userId
+          sock.__kingSaqrNumber = this.number
+          if (typeof sock.__kingSaqrHandleMessages === 'function') {
+            sock.__kingSaqrHandleMessages(filtered).catch((e) =>
+              logError(`[${this.number}] king-saqr dispatch`, e?.message || e)
+            )
+          }
+        } catch (e) {
+          logWarn(`[${this.number}] king-saqr try:`, e?.message || e)
+        }
+        // 2) مسار whatsapp.js الأصلي (حماية المجموعات، تنزيلات المالك، إلخ)
         this.onMessages(filtered, `upsert:${type || 'notify'}`).catch((e) =>
           logError(`[${this.number}] messages.upsert`, e.message)
         )
